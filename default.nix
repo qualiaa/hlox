@@ -1,6 +1,6 @@
 { pkgs ? import <nixpkgs> {} }:
 
 pkgs.haskellPackages.developPackage {
-  name = "crafting-interpreters";
+  name = "hlox";
   root = ./.;
 }

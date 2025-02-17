@@ -3,12 +3,12 @@
 let
   haskellPackages = pkgs.haskellPackages.extend (
     pkgs.haskell.lib.compose.packageSourceOverrides {
-      crafting-interpreters = ./.;
+      hlox = ./.;
     }
   );
 in
 haskellPackages.shellFor {
-  packages = p: [ p.crafting-interpreters ];
+  packages = p: [ p.hlox ];
   withHoogle = true;
   doBenchmark = true;
   buildInputs = (with haskellPackages; [ haskell-language-server cabal-install ]);
