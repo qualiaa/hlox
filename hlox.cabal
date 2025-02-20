@@ -81,11 +81,12 @@ executable lox
     default-language: GHC2021
 
 library lox-internal
-    exposed-modules:  Lox.Lexer
+    exposed-modules:  Lox.Lexer Lox.Token Lox.Loc
 
     build-depends:
         base ^>=4.18.2.1
       , bytestring
+      , data-default
       , mtl
       , transformers
       , text

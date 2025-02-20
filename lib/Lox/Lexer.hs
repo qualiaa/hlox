@@ -1,19 +1,31 @@
 {-# LANGUAGE LambdaCase #-}
 module Lox.Lexer where
+
 import Control.Monad (forever)
 import Control.Applicative (Alternative((<|>)))
 import Control.Monad.Identity (Identity(..))
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Except (ExceptT(..), runExceptT)
+import Control.Monad.Except (ExceptT(..), runExceptT, throwError)
 import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Control.Monad.State (StateT(..), runStateT)
 import Control.Exception (catch, throwIO)
 import System.IO (hPutStrLn, readFile', stderr)
 import System.IO.Error (isEOFError)
 import Prelude hiding (lex)
+import Data.Default (Default, def)
+
+import qualified Lox.Token as Tok (Token(..), LabelledToken(..))
+import Lox.Token as Tok (Token, LabelledToken)
+
+import Lox.Loc (Loc(..))
+
+newtype LoxState = LoxState { loc :: Loc }
+
+instance Default LoxState where
+  def = LoxState { loc = mempty }
 
 type LoxConfig = ()
-type LoxState = ()
+
 
 type LoxT m = ExceptT String (ReaderT LoxConfig (StateT LoxState m))
 type Lox = LoxT Identity
@@ -40,7 +52,7 @@ runPrompt = do
   where repl = forever (
           do
             line <- getLine
-            evalLoxT () () (run line) >>= (
+            evalLoxT () def (run line) >>= (
               \case
                 Left err -> hPutStrLn stderr err
                 Right _ -> return ()))
@@ -52,7 +64,7 @@ runFile filePath = do
 
   code <- readFile' filePath
 
-  evalLoxT () () (run code) >>= (
+  evalLoxT () def (run code) >>= (
     \case
       Left err -> hPutStrLn stderr err
       Right _ -> return ())
@@ -63,7 +75,26 @@ run source = do
   tokens <- lex source
   liftIO $ mapM_ print tokens
 
-type Token = ()
+lex :: (Monad m) => String -> LoxT m [LabelledToken]
+lex s = reverse <$> go [] s
 
-lex :: (Monad m) => String -> LoxT m [Token]
-lex _ = return [()]
+  where lexMap :: String -> Maybe (String, Token, String)
+        lexMap ('(':s) = Just ("(", Tok.LeftParen, s)
+        lexMap (')':s) = Just (")", Tok.RightParen, s)
+        lexMap ('{':s) = Just ("{", Tok.LeftBrace, s)
+        lexMap ('}':s) = Just ("}", Tok.RightBrace, s)
+        lexMap (',':s) = Just (",", Tok.Comma, s)
+        lexMap ('.':s) = Just (".", Tok.Dot, s)
+        lexMap ('-':s) = Just ("-", Tok.Minus, s)
+        lexMap ('+':s) = Just ("+", Tok.Plus, s)
+        lexMap (';':s) = Just (";", Tok.Semicolon, s)
+        lexMap ('*':s) = Just ("*", Tok.Star, s)
+        lexMap _       = Nothing
+
+        -- Horrible hack, will redo this imminently
+        label t = Tok.LabelledToken t mempty
+        go lexed input = do
+          case lexMap input of
+            Nothing        -> throwError "Bad times!"
+            Just (parsed, t, [])   -> return (label t parsed:lexed)
+            Just (parsed, t, rest) -> go (label t parsed:lexed) rest
