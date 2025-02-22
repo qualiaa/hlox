@@ -24,14 +24,14 @@ data Token = LeftParen
            | Less
            | LessEqual
            -- Literals
-           | Identifier String
-           | String_ String
-           | Number Double
+           | Identifier !String
+           | String_    !String
+           | Number     !Double
            -- Keywords
            | And
            | Class
            | Else
-           | False
+           | False_
            | Fun
            | For
            | If
@@ -41,14 +41,58 @@ data Token = LeftParen
            | Return
            | Super
            | This
-           | True
+           | True_
            | Var
            | While
 
            | EOF
            deriving Show
 
-data LabelledToken = LabelledToken{ token :: Token
-                                  , loc :: Loc
-                                  , lexeme :: String
+data LabelledToken = LabelledToken{ token :: !Token
+                                  , loc   :: !Loc
                                   } deriving Show
+
+
+lexeme :: Token -> String
+lexeme     LeftParen  = "("
+lexeme     RightParen = ")"
+lexeme      LeftBrace = "{"
+lexeme     RightBrace = "}"
+lexeme          Comma = ","
+lexeme            Dot = "."
+lexeme          Minus = "-"
+lexeme           Plus = "+"
+lexeme      Semicolon = ";"
+lexeme          Slash = "/"
+lexeme           Star = "*"
+lexeme           Bang = "!"
+lexeme      BangEqual = "!="
+lexeme          Equal = "="
+lexeme     EqualEqual = "=="
+lexeme        Greater = ">"
+lexeme   GreaterEqual = ">="
+lexeme           Less = "<"
+lexeme      LessEqual = "<="
+lexeme (Identifier s) = show s
+lexeme    (String_ s) = show s
+lexeme     (Number n) = show n
+lexeme            And = "and"
+lexeme          Class = "class"
+lexeme           Else = "else"
+lexeme         False_ = "false"
+lexeme            Fun = "fun"
+lexeme            For = "for"
+lexeme             If = "if"
+lexeme            Nil = "nil"
+lexeme             Or = "or"
+lexeme          Print = "print"
+lexeme         Return = "return"
+lexeme          Super = "super"
+lexeme           This = "this"
+lexeme          True_ = "true"
+lexeme            Var = "var"
+lexeme          While = "while"
+lexeme            EOF = ""
+
+lexLen :: Token -> Int
+lexLen = length . lexeme
