@@ -1,13 +1,13 @@
 {-# LANGUAGE LambdaCase #-}
 module Lox.Lexer where
 
-import Control.Monad (forever, foldM_)
+import Control.Monad (forever, foldM_, void)
 import Control.Applicative (Alternative((<|>)), asum)
 import Control.Monad.Identity (Identity(..))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Except (ExceptT(..), runExceptT, tryError, MonadError(throwError), withError)
 import Control.Monad.Reader (ReaderT(..), runReaderT)
-import Control.Monad.State (StateT(..), runStateT, gets, MonadState (get, put))
+import Control.Monad.State (StateT(..), evalStateT, runStateT, gets, modify', MonadState (get, put))
 import Control.Exception (catch, throwIO)
 import Data.Default (def)
 import Data.Tuple (swap)
@@ -57,13 +57,22 @@ runPrompt = do
   repl `catch` \(e :: IOError) -> if isEOFError e then hPutStrLn stderr "See ya!"
                                   else throwIO e
 
-  where repl = forever (
+  where repl :: IO ()
+        repl = evalStateT repl' 0
+
+        repl' :: StateT Int IO ()
+        repl' = forever (
           do
-            line <- getLine
-            evalLoxT () (lexInit line) run >>= (
-              \case
-                Left err -> hPutStrLn stderr err
-                Right _ -> return ()))
+            lineNo <- get
+            line <- liftIO getLine
+            let state = LoxState { loc=Loc {codeLine=lineNo, codeCol=0}
+                                 , toLex = line
+                                 }
+            res <- liftIO $ evalLoxT () state run
+            case res of
+                Left err -> liftIO $ hPutStrLn stderr err
+                Right _ -> void $ modify' (+1)
+          )
 
 
 runFile :: String -> IO ()
