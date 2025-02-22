@@ -15,8 +15,8 @@ import System.IO (hPutStrLn, readFile', stderr)
 import System.IO.Error (isEOFError)
 import Prelude hiding (lex)
 
-import qualified Lox.Token as Tok (Token(..), LabelledToken(..))
-import Lox.Token as Tok (Token, LabelledToken)
+import qualified Lox.Token as Tok (RawToken(..), Token(..))
+import Lox.Token as Tok (RawToken, Token)
 
 import Lox.Loc (Loc(..), newLine, nextCol)
 
@@ -92,10 +92,10 @@ run = do
   tokens <- lex
   liftIO $ mapM_ print tokens
 
-lex :: (Monad m) => LoxT m [LabelledToken]
-lex = map (uncurry Tok.LabelledToken . swap) <$> endBy lexOneWithError eof
+lex :: (Monad m) => LoxT m [Token]
+lex = map (uncurry Tok.Token . swap) <$> endBy lexOneWithError eof
 
-  where lexOne :: (Monad m) => LoxT m (Loc, Token)
+  where lexOne :: (Monad m) => LoxT m (Loc, RawToken)
         lexOne = asum $ map withLoc [
           char '(' >> return Tok.LeftParen,
           char ')' >> return Tok.RightParen,
@@ -109,7 +109,7 @@ lex = map (uncurry Tok.LabelledToken . swap) <$> endBy lexOneWithError eof
           char '*' >> return Tok.Star
           ]
 
-        lexOneWithError :: (Monad m) => LoxT m (Loc, Token)
+        lexOneWithError :: (Monad m) => LoxT m (Loc, RawToken)
         lexOneWithError = do
           loc <- gets loc
           upcoming <- take 1 <$> look

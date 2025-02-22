@@ -3,57 +3,57 @@ module Lox.Token where
 import Lox.Loc (Loc(..))
 
            -- Single character tokens
-data Token = LeftParen
-           | RightParen
-           | LeftBrace
-           | RightBrace
-           | Comma
-           | Dot
-           | Minus
-           | Plus
-           | Semicolon
-           | Slash
-           | Star
-           -- One or two character tokens
-           | Bang
-           | BangEqual
-           | Equal
-           | EqualEqual
-           | Greater
-           | GreaterEqual
-           | Less
-           | LessEqual
-           -- Literals
-           | Identifier !String
-           | String_    !String
-           | Number     !Double
-           -- Keywords
-           | And
-           | Class
-           | Else
-           | False_
-           | Fun
-           | For
-           | If
-           | Nil
-           | Or
-           | Print
-           | Return
-           | Super
-           | This
-           | True_
-           | Var
-           | While
+data RawToken = LeftParen
+              | RightParen
+              | LeftBrace
+              | RightBrace
+              | Comma
+              | Dot
+              | Minus
+              | Plus
+              | Semicolon
+              | Slash
+              | Star
+              -- One or two character tokens
+              | Bang
+              | BangEqual
+              | Equal
+              | EqualEqual
+              | Greater
+              | GreaterEqual
+              | Less
+              | LessEqual
+              -- Literals
+              | Identifier !String
+              | String_    !String
+              | Number     !Double
+              -- Keywords
+              | And
+              | Class
+              | Else
+              | False_
+              | Fun
+              | For
+              | If
+              | Nil
+              | Or
+              | Print
+              | Return
+              | Super
+              | This
+              | True_
+              | Var
+              | While
 
-           | EOF
-           deriving Show
+              | EOF
+              deriving Show
 
-data LabelledToken = LabelledToken{ token :: !Token
-                                  , loc   :: !Loc
-                                  } deriving Show
+data Token = Token { token :: !RawToken
+                   , loc   :: !Loc
+                   } deriving Show
 
 
-lexeme :: Token -> String
+lexeme :: RawToken -> String
 lexeme     LeftParen  = "("
 lexeme     RightParen = ")"
 lexeme      LeftBrace = "{"
@@ -94,5 +94,5 @@ lexeme            Var = "var"
 lexeme          While = "while"
 lexeme            EOF = ""
 
-lexLen :: Token -> Int
+lexLen :: RawToken -> Int
 lexLen = length . lexeme
