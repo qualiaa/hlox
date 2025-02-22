@@ -1,12 +1,19 @@
 module Lox.Loc where
 
-data Loc = Loc { codeLine :: Int
-               , codeCol :: Int
+import Data.Default (Default, def)
+
+data Loc = Loc { codeLine :: !Int
+               , codeCol  :: !Int
                } deriving Show
 
-instance Semigroup Loc where
-  (Loc l0 c0) <> (Loc l1 c1) = Loc (l0+l1) (c0+c1)
+instance Default Loc where
+  def = Loc 0 0
 
-instance Monoid Loc where
-  mempty = Loc 0 0
-  mappend = (<>)
+newLine :: Loc -> Loc
+newLine (Loc { codeLine = l }) = Loc {codeLine=l+1, codeCol=0}
+
+nextLine :: Loc -> Loc
+nextLine loc@( Loc {codeLine = l} ) = loc { codeLine = l+1 }
+
+nextCol :: Loc -> Loc
+nextCol loc@( Loc {codeCol = c} ) = loc { codeCol = c+1 }
