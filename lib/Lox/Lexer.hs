@@ -11,6 +11,7 @@ import Control.Monad.State (StateT(..), evalStateT, runStateT, gets, modify', Mo
 import Control.Exception (catch, throwIO)
 import Data.Char (isSpace)
 import Data.Default (def)
+import Data.Functor (($>))
 import Data.List (sortBy, foldl', singleton)
 import Data.Ord (comparing)
 import Data.Tuple (swap)
@@ -194,9 +195,8 @@ satisfy p = do
   c <- nextChar
   if p c then return c else lexError $ "Character" ++ [c] ++ "did not match predicate"
 
-manyTill :: (Alternative m, MonadState LexState m)
-         => m a -> m b -> m [a]
-manyTill p end = (end >> return []) <|> (:) <$> p <*> manyTill p end
+manyTill :: (Alternative m) => m a -> m b -> m [a]
+manyTill p end = (end $> []) <|> (:) <$> p <*> manyTill p end
 
 withLoc :: (MonadState LexState m) => m a -> m (Loc, a)
 withLoc p = gets ((,) . loc) <*> p
