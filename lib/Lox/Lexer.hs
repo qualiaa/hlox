@@ -135,16 +135,31 @@ lex = do
           char '+' >> return Tok.Plus,
           char ';' >> return Tok.Semicolon,
           char '*' >> return Tok.Star,
+
           char '=' >> (char '=' >> return Tok.EqualEqual)   <|> return Tok.Equal,
           char '!' >> (char '=' >> return Tok.BangEqual)    <|> return Tok.Bang,
           char '>' >> (char '=' >> return Tok.GreaterEqual) <|> return Tok.Greater,
           char '<' >> (char '=' >> return Tok.LessEqual)    <|> return Tok.Less,
+
           char '/' >>
-            -- If //, ignore characters until \n or EOF, then lex next token
+
+            -- Comment handling: if //, ignore characters until \n or EOF, then
+            -- lex next token.
+            -- NOTE: This may hit EOF in file with no trailing newline (or
+            --       repl). This is ok because successful lex of eof is
+            --       idempotent.
+            -- FIXME: loc for next token will be wrong!
             ((char '/' >> nextChar `manyTill` (void (char '\n') <|> eof) >> lexOneRaw)
+
+            -- Otherwise we just have a slash
             <|> return Tok.Slash),
+
+          -- Strings
+          -- TODO: Special error for unterminated string
+          Tok.String_ <$> between (char '"') (char '"') (many $ satisfy (/='"')),
+
           eof      >> return Tok.EOF
-          ] <* skipSpaces
+          ] <* skipSpaces  -- Skip spaces at *end* not beginning so that loc is correct
 
         lexOne :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Token
         lexOne = do
@@ -207,6 +222,9 @@ many p = do
   case res of
     Right v -> (v:) <$> many p
     Left _ -> return []
+
+between :: (Applicative m) => m open -> m close -> m a -> m a
+between open close p = open *> p <* close
 
 skipMany :: (Alternative m, MonadState LexState m, MonadError [LexError] m)
          => m a -> m ()
