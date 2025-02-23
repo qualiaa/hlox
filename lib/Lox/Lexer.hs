@@ -135,6 +135,10 @@ lex = do
           char '+' >> return Tok.Plus,
           char ';' >> return Tok.Semicolon,
           char '*' >> return Tok.Star,
+          char '=' >> (char '=' >> return Tok.EqualEqual)   <|> return Tok.Equal,
+          char '!' >> (char '=' >> return Tok.BangEqual)    <|> return Tok.Bang,
+          char '>' >> (char '=' >> return Tok.GreaterEqual) <|> return Tok.Greater,
+          char '<' >> (char '=' >> return Tok.LessEqual)    <|> return Tok.Less,
           eof      >> return Tok.EOF
           ]
 
@@ -159,16 +163,16 @@ nextChar :: (MonadState LexState m, MonadError [LexError] m) => m Char
 nextChar = do
 
   oldState@( LexState {loc=loc, toLex=toLex} ) <- get
-  let newState c toLex = LexState { loc=if c == '\n'
-                                    then newLine loc
-                                    else nextCol loc
-                                  , toLex=tail toLex
-                                  }
 
   case toLex of
-    []         -> put oldState           >> lexError "EOF"
-    (c:toLex)  -> put (newState c toLex) >> return c
+    []       -> put oldState             >> lexError "EOF"
+    (c:rest) -> put (newState loc toLex) >> return c
 
+  where newState loc (c:rest) = LexState { loc=if c == '\n'
+                                               then newLine loc
+                                               else nextCol loc
+                                         , toLex=rest
+                                         }
 
 
 look :: (MonadState LexState m) => m String
