@@ -96,3 +96,22 @@ lexeme            EOF = ""
 
 lexLen :: RawToken -> Int
 lexLen = length . lexeme
+
+keyword :: String -> Maybe RawToken
+keyword "for"    = Just For
+keyword "and"    = Just And
+keyword "class"  = Just Class
+keyword "else"   = Just Else
+keyword "false"  = Just False_
+keyword "fun"    = Just Fun
+keyword "if"     = Just If
+keyword "nil"    = Just Nil
+keyword "or"     = Just Or
+keyword "print"  = Just Print
+keyword "return" = Just Return
+keyword "super"  = Just Super
+keyword "this"   = Just This
+keyword "true"   = Just True_
+keyword "var"    = Just Var
+keyword "while"  = Just While
+keyword _ = Nothing

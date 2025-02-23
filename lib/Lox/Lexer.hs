@@ -9,10 +9,11 @@ import Control.Monad.Except (ExceptT(..), runExceptT, tryError, MonadError(throw
 import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Control.Monad.State (StateT(..), evalStateT, runStateT, gets, modify', MonadState (get, put))
 import Control.Exception (catch, throwIO)
-import Data.Char (isDigit, isSpace)
+import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
 import Data.Default (def)
 import Data.Functor (($>))
 import Data.List (sortBy, foldl', singleton)
+import Data.Maybe (fromMaybe)
 import Data.Ord (comparing)
 import Data.Tuple (swap)
 import System.IO (hPrint, hPutStrLn, readFile', stderr)
@@ -20,7 +21,7 @@ import System.IO.Error (isEOFError)
 import Prelude hiding (lex)
 
 import qualified Lox.Token as Tok (RawToken(..), Token(..))
-import Lox.Token as Tok (RawToken, Token, token)
+import Lox.Token as Tok (RawToken, Token, token, keyword)
 
 import Lox.Loc (Loc(..), adjacent, newLine, nextCol)
 
@@ -161,7 +162,10 @@ lex = do
           -- FIXME: Because we parse the number, we need to store the lexeme for rich error reporting.
           Tok.Number <$> number,
 
-          eof      >> return Tok.EOF
+          -- Identifier parsing includes keyword tokens
+          identifier,
+
+          eof >> return Tok.EOF
           ] <* skipSpaces  -- Skip spaces at *end* not beginning so that loc is correct
 
         lexOne :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Token
@@ -207,6 +211,12 @@ number = read <$> numberString
           decimal <- digits
           fractional <- (optional (char '.') >> digits) <|> return "0"
           return $ decimal ++ "." ++ fractional
+
+
+identifier :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m RawToken
+identifier = do
+  str <- (:) <$> satisfy isAlpha <*> many (satisfy isAlphaNum)
+  return $ fromMaybe (Tok.Identifier str) (Tok.keyword str)
 
 look :: (MonadState LexState m) => m String
 look = gets toLex
