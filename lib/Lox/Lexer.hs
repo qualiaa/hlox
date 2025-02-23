@@ -9,7 +9,7 @@ import Control.Monad.Except (ExceptT(..), runExceptT, tryError, MonadError(throw
 import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Control.Monad.State (StateT(..), evalStateT, runStateT, gets, modify', MonadState (get, put))
 import Control.Exception (catch, throwIO)
-import Data.Char (isSpace)
+import Data.Char (isDigit, isSpace)
 import Data.Default (def)
 import Data.Functor (($>))
 import Data.List (sortBy, foldl', singleton)
@@ -158,6 +158,9 @@ lex = do
           -- TODO: Special error for unterminated string
           Tok.String_ <$> between (char '"') (char '"') (many $ satisfy (/='"')),
 
+          -- FIXME: Because we parse the number, we need to store the lexeme for rich error reporting.
+          Tok.Number <$> number,
+
           eof      >> return Tok.EOF
           ] <* skipSpaces  -- Skip spaces at *end* not beginning so that loc is correct
 
@@ -196,6 +199,14 @@ nextChar = do
                                          , toLex=rest
                                          }
 
+number :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Double
+number = read <$> numberString
+  where digits = some (satisfy isDigit)
+
+        numberString = do
+          decimal <- digits
+          fractional <- (optional (char '.') >> digits) <|> return "0"
+          return $ decimal ++ "." ++ fractional
 
 look :: (MonadState LexState m) => m String
 look = gets toLex
@@ -229,6 +240,12 @@ between open close p = open *> p <* close
 skipMany :: (Alternative m, MonadState LexState m, MonadError [LexError] m)
          => m a -> m ()
 skipMany = void . many
+
+option :: (Alternative m) => a -> m a -> m a
+option x p = p <|> pure x
+
+optional :: (Alternative m) => m a -> m ()
+optional p = void p <|> pure ()
 
 some :: (MonadState LexState m, MonadError [LexError] m) => m a -> m [a]
 some p = (:) <$> p <*> many p
