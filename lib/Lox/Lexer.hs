@@ -2,7 +2,7 @@
 module Lox.Lexer where
 
 import Control.Monad (forever, foldM_, void)
-import Control.Applicative (Alternative((<|>)), asum)
+import Control.Applicative (Alternative((<|>)), asum, some, many)
 import Control.Monad.Identity (Identity(..))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Except (ExceptT(..), runExceptT, tryError, MonadError(throwError), withError)
@@ -237,13 +237,6 @@ manyTill p end = (end $> []) <|> (:) <$> p <*> manyTill p end
 withLoc :: (MonadState LexState m) => m a -> m (Loc, a)
 withLoc p = gets ((,) . loc) <*> p
 
-many :: (MonadState LexState m, MonadError [LexError] m) => m a -> m [a]
-many p = do
-  res <-  tryError p
-  case res of
-    Right v -> (v:) <$> many p
-    Left _ -> return []
-
 between :: (Applicative m) => m open -> m close -> m a -> m a
 between open close p = open *> p <* close
 
@@ -256,9 +249,6 @@ option x p = p <|> pure x
 
 optional :: (Alternative m) => m a -> m ()
 optional p = void p <|> pure ()
-
-some :: (MonadState LexState m, MonadError [LexError] m) => m a -> m [a]
-some p = (:) <$> p <*> many p
 
 eof :: (MonadState LexState m, MonadError [LexError] m) => m ()
 eof = do
