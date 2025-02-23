@@ -9,8 +9,9 @@ import Control.Monad.Except (ExceptT(..), runExceptT, tryError, MonadError(throw
 import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Control.Monad.State (StateT(..), evalStateT, runStateT, gets, modify', MonadState (get, put))
 import Control.Exception (catch, throwIO)
+import Data.Char (isSpace)
 import Data.Default (def)
-import Data.List (sortBy, foldl')
+import Data.List (sortBy, foldl', singleton)
 import Data.Ord (comparing)
 import Data.Tuple (swap)
 import System.IO (hPrint, hPutStrLn, readFile', stderr)
@@ -21,8 +22,6 @@ import qualified Lox.Token as Tok (RawToken(..), Token(..))
 import Lox.Token as Tok (RawToken, Token, token)
 
 import Lox.Loc (Loc(..), adjacent, newLine, nextCol)
-import Data.List (singleton)
-
 
 putErrLn = hPutStrLn stderr
 
@@ -123,8 +122,8 @@ lex = do
 
     Left e -> nextChar >> withError (e++) findAllErrors
 
-  where lexOneRaw :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m (Loc, RawToken)
-        lexOneRaw = asum $ map withLoc [
+  where lexOneRaw :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m RawToken
+        lexOneRaw = asum [
           char '(' >> return Tok.LeftParen,
           char ')' >> return Tok.RightParen,
           char '{' >> return Tok.LeftBrace,
@@ -139,23 +138,30 @@ lex = do
           char '!' >> (char '=' >> return Tok.BangEqual)    <|> return Tok.Bang,
           char '>' >> (char '=' >> return Tok.GreaterEqual) <|> return Tok.Greater,
           char '<' >> (char '=' >> return Tok.LessEqual)    <|> return Tok.Less,
+          char '/' >>
+            -- If //, ignore characters until \n or EOF, then lex next token
+            ((char '/' >> nextChar `manyTill` (void (char '\n') <|> eof) >> lexOneRaw)
+            <|> return Tok.Slash),
           eof      >> return Tok.EOF
-          ]
+          ] <* skipSpaces
 
         lexOne :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Token
         lexOne = do
+          -- lexOneRaw concatenates lex errors for every token. We need to
+          -- replace that with a single error indicating the unlexable character
           err <- gets (LexError . loc) <*> (take 1 <$> look)
-          uncurry Tok.Token . swap <$> withError (const [err]) lexOneRaw
+          uncurry Tok.Token . swap <$> withError (const [err]) (skipSpaces >> withLoc lexOneRaw)
 
         findAllErrors :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m a
         findAllErrors = do
           tok <- tryError lexOne
           case tok of
-            Right tok@(Tok.Token{token=Tok.EOF}) -> throwError []
+            Right (Tok.Token{token=Tok.EOF}) -> throwError []
             Right _ -> findAllErrors
             Left e -> throwError e <|> (nextChar >> findAllErrors)
 
-
+skipSpaces :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m ()
+skipSpaces = skipMany $ satisfy isSpace
 
 -- As per usual, I have immediately found myself writing a scuffed parser
 -- combinator ... if only parsec had been invented.
@@ -183,6 +189,15 @@ char c = do
   c' <- nextChar
   if c == c' then return c else lexError $ "Expected " ++ [c] ++ "but found" ++ [c']
 
+satisfy :: (MonadState LexState m, MonadError [LexError] m) => (Char -> Bool) -> m Char
+satisfy p = do
+  c <- nextChar
+  if p c then return c else lexError $ "Character" ++ [c] ++ "did not match predicate"
+
+manyTill :: (Alternative m, MonadState LexState m)
+         => m a -> m b -> m [a]
+manyTill p end = (end >> return []) <|> (:) <$> p <*> manyTill p end
+
 withLoc :: (MonadState LexState m) => m a -> m (Loc, a)
 withLoc p = gets ((,) . loc) <*> p
 
@@ -192,6 +207,10 @@ many p = do
   case res of
     Right v -> (v:) <$> many p
     Left _ -> return []
+
+skipMany :: (Alternative m, MonadState LexState m, MonadError [LexError] m)
+         => m a -> m ()
+skipMany = void . many
 
 some :: (MonadState LexState m, MonadError [LexError] m) => m a -> m [a]
 some p = (:) <$> p <*> many p
