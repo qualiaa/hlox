@@ -49,7 +49,7 @@ data RawToken = LeftParen
               deriving Show
 
 data Token = Token { token :: !RawToken
-                   , loc   :: !Loc
+                   , tokenLoc   :: !Loc
                    } deriving Show
 
 

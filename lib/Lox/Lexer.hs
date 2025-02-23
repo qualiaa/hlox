@@ -10,35 +10,41 @@ import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Control.Monad.State (StateT(..), evalStateT, runStateT, gets, modify', MonadState (get, put))
 import Control.Exception (catch, throwIO)
 import Data.Default (def)
+import Data.List (sortBy, foldl')
+import Data.Ord (comparing)
 import Data.Tuple (swap)
-import System.IO (hPutStrLn, readFile', stderr)
+import System.IO (hPrint, hPutStrLn, readFile', stderr)
 import System.IO.Error (isEOFError)
 import Prelude hiding (lex)
 
 import qualified Lox.Token as Tok (RawToken(..), Token(..))
-import Lox.Token as Tok (RawToken, Token)
+import Lox.Token as Tok (RawToken, Token, token)
 
-import Lox.Loc (Loc(..), newLine, nextCol)
+import Lox.Loc (Loc(..), adjacent, newLine, nextCol)
+import Data.List (singleton)
 
-data LoxState = LoxState { loc   :: !Loc
+
+putErrLn = hPutStrLn stderr
+
+
+data LexState = LexState { loc   :: !Loc
                          , toLex :: !String
                          } deriving Show
 
-lexInit :: String -> LoxState
-lexInit = LoxState def
+lexInit :: String -> LexState
+lexInit = LexState def
 
 
 type LoxConfig = ()
 
+data LexError = LexError { errLoc :: !Loc
+                         , errString :: !String
+                         } deriving Show
 
-type LoxT m = ReaderT LoxConfig (StateT LoxState (ExceptT String m))
+type LoxT m = ReaderT LoxConfig (StateT LexState (ExceptT [LexError] m))
 type Lox = LoxT Identity
 
---runLoxT :: (Monad m) => LoxConfig -> LoxState -> LoxT m a -> m (Either String a, LoxState)
---runLoxT c s a = let a'  = runExceptT a
---                    a'' = runReaderT a' c
---               in runStateT a'' s
-runLoxT :: (Monad m) => LoxConfig -> LoxState -> LoxT m a -> m (Either String (a, LoxState))
+runLoxT :: (Monad m) => LoxConfig -> LexState -> LoxT m a -> m (Either [LexError] (a, LexState))
 runLoxT c s a = let a'  = runReaderT a c
                     a'' = runStateT a' s
                 in runExceptT a''
@@ -52,9 +58,9 @@ execLox c s a = let (Identity x) = execLoxT c s a in x
 
 runPrompt :: IO ()
 runPrompt = do
-  liftIO $ hPutStrLn stderr "Welcome to the Lox interpreter!"
+  liftIO $ putErrLn "Welcome to the Lox interpreter!"
 
-  repl `catch` \(e :: IOError) -> if isEOFError e then hPutStrLn stderr "See ya!"
+  repl `catch` \(e :: IOError) -> if isEOFError e then putErrLn "See ya!"
                                   else throwIO e
 
   where repl :: IO ()
@@ -65,26 +71,42 @@ runPrompt = do
           do
             lineNo <- get
             line <- liftIO getLine
-            let state = LoxState { loc=Loc {codeLine=lineNo, codeCol=0}
+            let state = LexState { loc=Loc {codeLine=lineNo, codeCol=0}
                                  , toLex = line
                                  }
+
             res <- liftIO $ evalLoxT () state run
             case res of
-                Left err -> liftIO $ hPutStrLn stderr err
+                Left errors -> liftIO $ printErrors line errors
                 Right _ -> void $ modify' (+1)
           )
 
-
 runFile :: String -> IO ()
 runFile filePath = do
-  hPutStrLn stderr ("Received " ++ filePath)
+  putErrLn ("Received " ++ filePath)
 
   code <- readFile' filePath
 
   evalLoxT () (lexInit code) run >>= (
     \case
-      Left err -> hPutStrLn stderr err
+      Left errors -> liftIO $ printErrors code errors
       Right _ -> return ())
+
+
+printErrors :: String -> [LexError] -> IO ()
+printErrors _ [] = putErrLn "Unknown error occurred!"
+printErrors s errs = (mapM_ (hPrint stderr) . merge . sortByLoc) errs
+  -- TODO: Print source code
+  -- TODO: Colours :)
+  where sortByLoc :: [LexError] -> [LexError]
+        sortByLoc = sortBy (comparing ((\(Loc{codeLine, codeCol}) -> (codeLine, codeCol)) . errLoc))
+
+        merge :: [LexError] -> [(LexError, Int)]
+        merge [] = []
+        merge (x:xs) = reverse $ foldl' joinAdjacent [(x, 0)] (zip (x:xs) xs)
+
+        joinAdjacent a@((aErr, aN):aErrs) (err0, err1) =
+          if errLoc err0 `adjacent` errLoc err1 then (aErr, succ aN):aErrs else (err1, 0):a
 
 
 run :: LoxT IO ()
@@ -93,10 +115,16 @@ run = do
   liftIO $ mapM_ print tokens
 
 lex :: (Monad m) => LoxT m [Token]
-lex = map (uncurry Tok.Token . swap) <$> endBy lexOneWithError eof
+lex = do
+  tok <- tryError lexOne
+  case tok of
+    Right tok@(Tok.Token{token=Tok.EOF}) -> return [tok]
+    Right tok -> (tok:) <$> lex
 
-  where lexOne :: (Monad m) => LoxT m (Loc, RawToken)
-        lexOne = asum $ map withLoc [
+    Left e -> nextChar >> withError (e++) findAllErrors
+
+  where lexOneRaw :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m (Loc, RawToken)
+        lexOneRaw = asum $ map withLoc [
           char '(' >> return Tok.LeftParen,
           char ')' >> return Tok.RightParen,
           char '{' >> return Tok.LeftBrace,
@@ -106,68 +134,69 @@ lex = map (uncurry Tok.Token . swap) <$> endBy lexOneWithError eof
           char '-' >> return Tok.Minus,
           char '+' >> return Tok.Plus,
           char ';' >> return Tok.Semicolon,
-          char '*' >> return Tok.Star
+          char '*' >> return Tok.Star,
+          eof      >> return Tok.EOF
           ]
 
-        lexOneWithError :: (Monad m) => LoxT m (Loc, RawToken)
-        lexOneWithError = do
-          loc <- gets loc
-          upcoming <- take 1 <$> look
-          withError (const $ "Unexpected character at " ++ show loc ++ "; got: " ++ upcoming) lexOne
+        lexOne :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Token
+        lexOne = do
+          err <- gets (LexError . loc) <*> (take 1 <$> look)
+          uncurry Tok.Token . swap <$> withError (const [err]) lexOneRaw
 
+        findAllErrors :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m a
+        findAllErrors = do
+          tok <- tryError lexOne
+          case tok of
+            Right tok@(Tok.Token{token=Tok.EOF}) -> throwError []
+            Right _ -> findAllErrors
+            Left e -> throwError e <|> (nextChar >> findAllErrors)
 
 
 
 -- As per usual, I have immediately found myself writing a scuffed parser
 -- combinator ... if only parsec had been invented.
-nextChar :: (MonadState LoxState m, MonadError String m) => m Char
+nextChar :: (MonadState LexState m, MonadError [LexError] m) => m Char
 nextChar = do
 
-  oldState@( LoxState {loc=loc, toLex=toLex} ) <- get
+  oldState@( LexState {loc=loc, toLex=toLex} ) <- get
+  let newState c toLex = LexState { loc=if c == '\n'
+                                    then newLine loc
+                                    else nextCol loc
+                                  , toLex=tail toLex
+                                  }
 
   case toLex of
-    []       -> put oldState             >> throwError "EOF"
-    (c:rest) -> put (newState loc toLex) >> return c
+    []         -> put oldState           >> lexError "EOF"
+    (c:toLex)  -> put (newState c toLex) >> return c
 
-  where newState loc (c:rest) = LoxState { loc=if c == '\n'
-                                               then newLine loc
-                                               else nextCol loc
-                                         , toLex=rest
-                                         }
 
-look :: (MonadState LoxState m) => m String
+
+look :: (MonadState LexState m) => m String
 look = gets toLex
 
-char :: (MonadState LoxState m, MonadError String m) => Char -> m Char
+char :: (MonadState LexState m, MonadError [LexError] m) => Char -> m Char
 char c = do
   c' <- nextChar
-  if c == c' then return c else throwError $ "Expected " ++ [c] ++ "but found" ++ [c']
+  if c == c' then return c else lexError $ "Expected " ++ [c] ++ "but found" ++ [c']
 
-withLoc :: (MonadState LoxState m, MonadError String m) => m a -> m (Loc, a)
+withLoc :: (MonadState LexState m) => m a -> m (Loc, a)
 withLoc p = gets ((,) . loc) <*> p
 
-many :: (MonadState LoxState m, MonadError String m) => m a -> m [a]
+many :: (MonadState LexState m, MonadError [LexError] m) => m a -> m [a]
 many p = do
   res <-  tryError p
   case res of
     Right v -> (v:) <$> many p
     Left _ -> return []
 
-some :: (MonadState LoxState m, MonadError String m) => m a -> m [a]
+some :: (MonadState LexState m, MonadError [LexError] m) => m a -> m [a]
 some p = (:) <$> p <*> many p
 
-endBy :: (MonadState LoxState m, MonadError String m) => m a -> m b ->  m [a]
-endBy p e = do
-  lexed <- some p
-  loc <- gets loc
-  upcoming <- take 1 <$> look
-  withError (\err -> err ++ " at " ++ show loc ++"; got: " ++ upcoming) e
-  return lexed
-
-eof :: (MonadState LoxState m, MonadError String m) => m ()
+eof :: (MonadState LexState m, MonadError [LexError] m) => m ()
 eof = do
-  remaining <- gets toLex
-  if null remaining then return () else throwError "Expected EOF"
+  remaining <- look
+  if null remaining then return () else lexError "Expected EOF"
 
---str :: (MonadState LoxState m, MonadError String m) => String -> m String
---str s = foldM_
+lexError :: (MonadState LexState m, MonadError [LexError] m)
+           => String -> m a
+lexError s = gets (singleton . flip LexError s . loc) >>= throwError
