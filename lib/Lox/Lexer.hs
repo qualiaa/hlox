@@ -23,7 +23,7 @@ import Prelude hiding (lex)
 import qualified Lox.Token as Tok (RawToken(..), Token(..))
 import Lox.Token as Tok (RawToken, Token, token, keyword)
 
-import Lox.Loc (Loc(..), adjacent, newLine, nextCol)
+import Lox.Loc (Loc, adjacent, inc)
 
 putErrLn = hPutStrLn stderr
 
@@ -72,7 +72,7 @@ runPrompt = do
           do
             lineNo <- get
             line <- liftIO getLine
-            let state = LexState { loc=Loc {codeLine=lineNo, codeCol=0}
+            let state = LexState { loc=def
                                  , toLex = line
                                  }
 
@@ -100,7 +100,7 @@ printErrors s errs = (mapM_ (hPrint stderr) . merge . sortByLoc) errs
   -- TODO: Print source code
   -- TODO: Colours :)
   where sortByLoc :: [LexError] -> [LexError]
-        sortByLoc = sortBy (comparing ((\(Loc{codeLine, codeCol}) -> (codeLine, codeCol)) . errLoc))
+        sortByLoc = sortBy (comparing errLoc)
 
         merge :: [LexError] -> [(LexError, Int)]
         merge [] = []
@@ -122,7 +122,7 @@ lex = do
     Right tok@(Tok.Token{token=Tok.EOF}) -> return [tok]
     Right tok -> (tok:) <$> lex
 
-    Left e -> findAllErrors
+    Left _ -> findAllErrors
 
   where lexOneRaw :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m RawToken
         lexOneRaw = asum [
@@ -196,9 +196,7 @@ nextChar = do
     []       -> put oldState             >> lexError "EOF"
     (c:rest) -> put (newState loc toLex) >> return c
 
-  where newState loc (c:rest) = LexState { loc=if c == '\n'
-                                               then newLine loc
-                                               else nextCol loc
+  where newState loc (c:rest) = LexState { loc=succ loc
                                          , toLex=rest
                                          }
 
