@@ -122,7 +122,7 @@ lex = do
     Right tok@(Tok.Token{token=Tok.EOF}) -> return [tok]
     Right tok -> (tok:) <$> lex
 
-    Left e -> nextChar >> withError (e++) findAllErrors
+    Left e -> findAllErrors
 
   where lexOneRaw :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m RawToken
         lexOneRaw = asum [
@@ -142,18 +142,8 @@ lex = do
           char '>' >> (char '=' >> return Tok.GreaterEqual) <|> return Tok.Greater,
           char '<' >> (char '=' >> return Tok.LessEqual)    <|> return Tok.Less,
 
-          char '/' >>
-
-            -- Comment handling: if //, ignore characters until \n or EOF, then
-            -- lex next token.
-            -- NOTE: This may hit EOF in file with no trailing newline (or
-            --       repl). This is ok because successful lex of eof is
-            --       idempotent.
-            -- FIXME: loc for next token will be wrong!
-            ((char '/' >> nextChar `manyTill` (void (char '\n') <|> eof) >> lexOneRaw)
-
-            -- Otherwise we just have a slash
-            <|> return Tok.Slash),
+          -- Comments have already been dealt with
+          char '/' >> return Tok.Slash,
 
           -- Strings
           -- TODO: Special error for unterminated string
@@ -166,14 +156,16 @@ lex = do
           identifier,
 
           eof >> return Tok.EOF
-          ] <* skipSpaces  -- Skip spaces at *end* not beginning so that loc is correct
+          ]
 
         lexOne :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Token
         lexOne = do
           -- lexOneRaw concatenates lex errors for every token. We need to
           -- replace that with a single error indicating the unlexable character
+          skipNonTokens
           err <- gets (LexError . loc) <*> (take 1 <$> look)
-          uncurry Tok.Token . swap <$> withError (const [err]) (skipSpaces >> withLoc lexOneRaw)
+
+          uncurry Tok.Token . swap <$> withError (const [err]) (withLoc lexOneRaw)
 
         findAllErrors :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m a
         findAllErrors = do
@@ -185,6 +177,13 @@ lex = do
 
 skipSpaces :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m ()
 skipSpaces = skipMany $ satisfy isSpace
+
+-- Comment handling: if //, ignore characters until \n or EOF
+-- NOTE: This may hit EOF in file with no trailing newline (or repl). This is ok
+--       because successful lex of eof is idempotent.
+skipNonTokens :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m ()
+skipNonTokens = skipSpaces >> optional (comment >> skipSpaces)
+  where comment = string "//" >> nextChar `manyTill` (void (char '\n') <|> eof)
 
 -- As per usual, I have immediately found myself writing a scuffed parser
 -- combinator ... if only parsec had been invented.
@@ -225,6 +224,9 @@ char :: (MonadState LexState m, MonadError [LexError] m) => Char -> m Char
 char c = do
   c' <- nextChar
   if c == c' then return c else lexError $ "Expected " ++ [c] ++ "but found" ++ [c']
+
+string :: (MonadState LexState m, MonadError [LexError] m) => String -> m String
+string = mapM char
 
 satisfy :: (MonadState LexState m, MonadError [LexError] m) => (Char -> Bool) -> m Char
 satisfy p = do
