@@ -8,7 +8,7 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Except (ExceptT(..), runExceptT, tryError, MonadError(throwError), withError)
 import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Control.Monad.State (StateT(..), evalStateT, runStateT, gets, modify', MonadState (get, put))
-import Control.Exception (catch, throwIO)
+import Control.Exception (catch, throwIO, throw, PatternMatchFail(..))
 import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
 import Data.Default (def)
 import Data.Functor (($>))
@@ -23,7 +23,7 @@ import Prelude hiding (lex)
 import qualified Lox.Token as Tok (RawToken(..), Token(..))
 import Lox.Token as Tok (RawToken, Token, token, keyword)
 
-import Lox.Loc (Loc, adjacent, inc)
+import Lox.Loc (Loc, adjacent, inc, steps)
 
 putErrLn = hPutStrLn stderr
 
@@ -38,7 +38,8 @@ lexInit = LexState def
 
 type LoxConfig = ()
 
-data LexError = LexError { errLoc :: !Loc
+data LexError = LexError { startLoc :: !Loc
+                         , endLoc :: !Loc
                          , errString :: !String
                          } deriving Show
 
@@ -65,21 +66,15 @@ runPrompt = do
                                   else throwIO e
 
   where repl :: IO ()
-        repl = evalStateT repl' 0
-
-        repl' :: StateT Int IO ()
-        repl' = forever (
+        repl = forever (
           do
-            lineNo <- get
-            line <- liftIO getLine
-            let state = LexState { loc=def
-                                 , toLex = line
-                                 }
+            line <- getLine
+            let state = LexState { loc=def, toLex = line}
 
-            res <- liftIO $ evalLoxT () state run
+            res <- evalLoxT () state run
             case res of
-                Left errors -> liftIO $ printErrors line errors
-                Right _ -> void $ modify' (+1)
+                Left errors -> printErrors line errors
+                Right _ -> return ()
           )
 
 runFile :: String -> IO ()
@@ -96,18 +91,19 @@ runFile filePath = do
 
 printErrors :: String -> [LexError] -> IO ()
 printErrors _ [] = putErrLn "Unknown error occurred!"
-printErrors s errs = (mapM_ (hPrint stderr) . merge . sortByLoc) errs
+--printErrors s errs = (mapM_ (hPrint stderr) . merge . sortByLoc) errs
+printErrors s errs = (mapM_ (hPrint stderr) . sortByLoc) errs
   -- TODO: Print source code
   -- TODO: Colours :)
   where sortByLoc :: [LexError] -> [LexError]
-        sortByLoc = sortBy (comparing errLoc)
+        sortByLoc = sortBy (comparing startLoc)
 
         merge :: [LexError] -> [(LexError, Int)]
         merge [] = []
         merge (x:xs) = reverse $ foldl' joinAdjacent [(x, 0)] (zip (x:xs) xs)
 
         joinAdjacent a@((aErr, aN):aErrs) (err0, err1) =
-          if errLoc err0 `adjacent` errLoc err1 then (aErr, succ aN):aErrs else (err1, 0):a
+          if startLoc err0 `adjacent` startLoc err1 then (aErr, succ aN):aErrs else (err1, 0):a
 
 
 run :: LoxT IO ()
@@ -125,55 +121,75 @@ lex = do
     Left _ -> findAllErrors
 
   where lexOneRaw :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m RawToken
-        lexOneRaw = asum [
-          char '(' >> return Tok.LeftParen,
-          char ')' >> return Tok.RightParen,
-          char '{' >> return Tok.LeftBrace,
-          char '}' >> return Tok.RightBrace,
-          char ',' >> return Tok.Comma,
-          char '.' >> return Tok.Dot,
-          char '-' >> return Tok.Minus,
-          char '+' >> return Tok.Plus,
-          char ';' >> return Tok.Semicolon,
-          char '*' >> return Tok.Star,
+        lexOneRaw = do
+          startLoc <- gets loc
 
-          char '=' >> (char '=' >> return Tok.EqualEqual)   <|> return Tok.Equal,
-          char '!' >> (char '=' >> return Tok.BangEqual)    <|> return Tok.Bang,
-          char '>' >> (char '=' >> return Tok.GreaterEqual) <|> return Tok.Greater,
-          char '<' >> (char '=' >> return Tok.LessEqual)    <|> return Tok.Less,
+          openQuote <- tryError $ char '"'
+          case openQuote of
+            Right _ -> do
+              value <- many $ satisfy (/='"')
+              endLoc <- gets loc
 
-          -- Comments have already been dealt with
-          char '/' >> return Tok.Slash,
+              withError' startLoc endLoc "Unterminated string" $ char '"'
+              return $ Tok.String_ value
 
-          -- Strings
-          -- TODO: Special error for unterminated string
-          Tok.String_ <$> between (char '"') (char '"') (many $ satisfy (/='"')),
+            Left _ -> withError' startLoc startLoc "Unexpected character" $ asum [
+                char '(' >> return Tok.LeftParen,
+                char ')' >> return Tok.RightParen,
+                char '{' >> return Tok.LeftBrace,
+                char '}' >> return Tok.RightBrace,
+                char ',' >> return Tok.Comma,
+                char '.' >> return Tok.Dot,
+                char '-' >> return Tok.Minus,
+                char '+' >> return Tok.Plus,
+                char ';' >> return Tok.Semicolon,
+                char '*' >> return Tok.Star,
 
-          -- FIXME: Because we parse the number, we need to store the lexeme for rich error reporting.
-          Tok.Number <$> number,
+                char '=' >> (char '=' >> return Tok.EqualEqual)   <|> return Tok.Equal,
+                char '!' >> (char '=' >> return Tok.BangEqual)    <|> return Tok.Bang,
+                char '>' >> (char '=' >> return Tok.GreaterEqual) <|> return Tok.Greater,
+                char '<' >> (char '=' >> return Tok.LessEqual)    <|> return Tok.Less,
 
-          -- Identifier parsing includes keyword tokens
-          identifier,
+                -- Comments have already been dealt with
+                char '/' >> return Tok.Slash,
 
-          eof >> return Tok.EOF
-          ]
+                -- FIXME: Because we parse the number, we need to store the lexeme for rich error reporting.
+                Tok.Number <$> number,
+
+                -- Identifier parsing includes keyword tokens
+                identifier,
+
+                eof >> return Tok.EOF
+                ]
+
 
         lexOne :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Token
         lexOne = do
           -- lexOneRaw concatenates lex errors for every token. We need to
           -- replace that with a single error indicating the unlexable character
           skipNonTokens
-          err <- gets (LexError . loc) <*> (take 1 <$> look)
 
-          uncurry Tok.Token . swap <$> withError (const [err]) (withLoc lexOneRaw)
+          uncurry Tok.Token . swap <$> withLoc lexOneRaw
 
         findAllErrors :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m a
         findAllErrors = do
           tok <- tryError lexOne
+          startLoc <- gets loc
+
+
           case tok of
             Right (Tok.Token{token=Tok.EOF}) -> throwError []
             Right _ -> findAllErrors
-            Left e -> throwError e <|> (nextChar >> findAllErrors)
+
+            Left [] -> lexError "Unknown error!"
+            Left [e@(LexError{endLoc})] -> do
+              modify' (\s@(LexState{toLex}) -> s {
+                          loc=endLoc,
+                          toLex=drop (steps startLoc endLoc) toLex})
+
+              throwError [e] <|> findAllErrors
+
+            Left e -> throw (PatternMatchFail $ "Compound errors have not been resolved! " ++ show e)
 
 skipSpaces :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m ()
 skipSpaces = skipMany $ satisfy isSpace
@@ -196,9 +212,7 @@ nextChar = do
     []       -> put oldState             >> lexError "EOF"
     (c:rest) -> put (newState loc toLex) >> return c
 
-  where newState loc (c:rest) = LexState { loc=succ loc
-                                         , toLex=rest
-                                         }
+  where newState loc (c:rest) = LexState { loc=succ loc , toLex=rest}
 
 number :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Double
 number = read <$> numberString
@@ -257,4 +271,9 @@ eof = do
 
 lexError :: (MonadState LexState m, MonadError [LexError] m)
            => String -> m a
-lexError s = gets (singleton . flip LexError s . loc) >>= throwError
+lexError s = do
+  loc <- gets loc
+  throwError [LexError loc (succ loc) s]
+
+withError' :: MonadError [LexError] m => Loc -> Loc -> String -> m a -> m a
+withError' start end msg = withError (const [LexError start (succ end) msg])

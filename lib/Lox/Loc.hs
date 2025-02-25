@@ -2,6 +2,7 @@ module Lox.Loc
   ( Loc
   , adjacent
   , inc
+  , steps
   ) where
 
 import Data.Default (Default, def)
@@ -14,5 +15,8 @@ instance Default Loc where
 inc :: Int -> Loc -> Loc
 inc n (Loc c) = Loc $ n + c
 
+steps :: Loc -> Loc -> Int
+steps (Loc n) (Loc m) = m - n
+
 adjacent :: Loc -> Loc -> Bool
-adjacent (Loc n) (Loc m) = abs (m - n) <= 1
+adjacent a = (<= 1) . abs . steps a
