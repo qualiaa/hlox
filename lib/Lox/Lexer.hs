@@ -38,10 +38,10 @@ lexInit = LexState def
 
 type LoxConfig = ()
 
-data LexError = LexError { startLoc :: !Loc
-                         , endLoc :: !Loc
-                         , errString :: !String
-                         } deriving Show
+data LexError = LexError !Loc String
+              | UnexpectedCharacter !Loc Char
+              | UnterminatedString !Loc !Loc
+              deriving Show
 
 type LoxT m = ReaderT LoxConfig (StateT LexState (ExceptT [LexError] m))
 type Lox = LoxT Identity
@@ -128,12 +128,9 @@ lex = do
           case openQuote of
             Right _ -> do
               value <- many $ satisfy (/='"')
-              endLoc <- gets loc
+              squashErrors (char '"' >> return (Tok.String_ value)) <|> unterminatedString startLoc
 
-              withError' startLoc endLoc "Unterminated string" $ char '"'
-              return $ Tok.String_ value
-
-            Left _ -> withError' startLoc startLoc "Unexpected character" $ asum [
+            Left _ -> squashErrors (asum [
                 char '(' >> return Tok.LeftParen,
                 char ')' >> return Tok.RightParen,
                 char '{' >> return Tok.LeftBrace,
@@ -161,6 +158,7 @@ lex = do
 
                 eof >> return Tok.EOF
                 ]
+             ) <|> unexpectedCharacter
 
 
         lexOne :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Token
@@ -174,20 +172,14 @@ lex = do
         findAllErrors :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m a
         findAllErrors = do
           tok <- tryError lexOne
-          startLoc <- gets loc
-
 
           case tok of
             Right (Tok.Token{token=Tok.EOF}) -> throwError []
             Right _ -> findAllErrors
 
             Left [] -> lexError "Unknown error!"
-            Left [e@(LexError{endLoc})] -> do
-              modify' (\s@(LexState{toLex}) -> s {
-                          loc=endLoc,
-                          toLex=drop (steps startLoc endLoc) toLex})
 
-              throwError [e] <|> findAllErrors
+            Left [e] -> skipError e >> throwError [e] <|> findAllErrors
 
             Left e -> throw (PatternMatchFail $ "Compound errors have not been resolved! " ++ show e)
 
@@ -273,7 +265,37 @@ lexError :: (MonadState LexState m, MonadError [LexError] m)
            => String -> m a
 lexError s = do
   loc <- gets loc
-  throwError [LexError loc (succ loc) s]
+  throwError [LexError loc s]
 
-withError' :: MonadError [LexError] m => Loc -> Loc -> String -> m a -> m a
-withError' start end msg = withError (const [LexError start (succ end) msg])
+skipError :: (MonadState LexState m, MonadError [LexError] m) => LexError -> m ()
+skipError e = do
+  loc0 <- gets loc
+  let loc1 = endLoc e
+
+  modify' (\s@(LexState{toLex}) -> s {
+              loc=loc1,
+                toLex=drop (steps loc0 loc1) toLex})
+
+unexpectedCharacter :: (MonadState LexState m, MonadError [LexError] m) => m a
+unexpectedCharacter = gets (UnexpectedCharacter . loc) <*> nextChar >>= throwError'
+
+unterminatedString :: (MonadState LexState m, MonadError [LexError] m) => Loc -> m a
+unterminatedString startLoc = gets (UnterminatedString startLoc . loc) >>= throwError'
+
+throwError' :: (MonadState LexState m, MonadError [LexError] m) => LexError -> m a
+throwError' e = throwError [e]
+
+startLoc :: LexError -> Loc
+startLoc (LexError l _) = l
+startLoc (UnexpectedCharacter l _) = l
+startLoc (UnterminatedString l _) = l
+
+endLoc :: LexError -> Loc
+endLoc (UnterminatedString _ l) = succ l
+endLoc e = succ $ startLoc e
+
+setError :: (MonadError [LexError] m) => LexError -> m a -> m a
+setError e = withError $ const [e]
+
+squashErrors :: (MonadError [LexError] m) => m a -> m a
+squashErrors = withError $ const []
