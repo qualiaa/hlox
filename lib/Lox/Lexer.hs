@@ -16,7 +16,7 @@ import Data.List (sortBy, foldl', singleton)
 import Data.Maybe (fromMaybe)
 import Data.Ord (comparing)
 import Data.Tuple (swap)
-import System.IO (hPrint, hPutStrLn, readFile', stderr)
+import System.IO (hPrint, hPutStr, hPutStrLn, readFile', stderr)
 import System.IO.Error (isEOFError)
 import Prelude hiding (lex)
 
@@ -91,19 +91,55 @@ runFile filePath = do
 
 printErrors :: String -> [LexError] -> IO ()
 printErrors _ [] = putErrLn "Unknown error occurred!"
---printErrors s errs = (mapM_ (hPrint stderr) . merge . sortByLoc) errs
-printErrors s errs = (mapM_ (hPrint stderr) . sortByLoc) errs
-  -- TODO: Print source code
+printErrors s errs =
+  let errs' = merge $ sortByLoc errs
+      errLines = getLines 0 def (map (startLoc . fst) errs') (lines s)
+  in mapM_ (uncurry printError) $ zip errs' errLines
+
   -- TODO: Colours :)
   where sortByLoc :: [LexError] -> [LexError]
         sortByLoc = sortBy (comparing startLoc)
 
-        merge :: [LexError] -> [(LexError, Int)]
+        -- A series of adjacent UnexpectedCharacters can be merged into one error
+        merge :: [LexError] -> [(LexError, String)]
         merge [] = []
-        merge (x:xs) = reverse $ foldl' joinAdjacent [(x, 0)] (zip (x:xs) xs)
+        merge (x:xs) = reverse $ foldl' joinAdjacent [(x, "")] xs
 
-        joinAdjacent a@((aErr, aN):aErrs) (err0, err1) =
-          if startLoc err0 `adjacent` startLoc err1 then (aErr, succ aN):aErrs else (err1, 0):a
+        joinAdjacent a@((aErr@(UnexpectedCharacter loc0 _), aS):aErrs) err1@(UnexpectedCharacter loc1 c1) =
+          if inc (length aS) loc0  `adjacent` loc1 then (aErr, aS ++ [c1]):aErrs else (err1, ""):a
+        joinAdjacent a err = (err, ""):a
+
+        getLines :: Int -> Loc -> [Loc] -> [String] -> [(Int, String, Int)]
+        getLines _ _ [] _                     = []
+        getLines _ _ _ []                     = error "Ran out of lines"
+        getLines lineNo pos (loc:locs) (l:ls) =
+          let lineEnd = inc (length l + 1) pos
+          in if loc > lineEnd then getLines (lineNo + 1) (inc 1 lineEnd) (loc:locs) ls
+          else (lineNo, l, steps pos loc)  : getLines lineNo pos locs (l:ls)
+
+        printError :: (LexError, String) -> (Int, String, Int) -> IO ()
+        printError (err, extraChars) (lineNo, line, startChar) = do
+          let errLen = length extraChars + steps (startLoc err) (endLoc err)
+              errLen' = min errLen $ length line - startChar
+          hPutStrLn stderr ""
+          hPutStrLn stderr $ "  Error " ++ show lineNo ++  ":" ++ show startChar ++ ":"
+          hPutStrLn stderr $  "    " ++ line
+          hPutStr   stderr $ replicate (startChar + 4) ' '
+          hPutStrLn stderr $ errMarker errLen'
+          hPutStrLn stderr $ prettyErr err extraChars
+
+        errMarker errLen = '^' : replicate (errLen-1) '~'
+
+        prettyErr (LexError _ s) _ = "Lexical Error: " ++ s
+        prettyErr (UnexpectedCharacter _ c) "" = "Unexpected character: '" ++ [c] ++ "'"
+        prettyErr (UnexpectedCharacter _ c) s = "Unexpected characters: '" ++ c:s ++ "'"
+        prettyErr (UnterminatedString _ _) _ = "Unterminated string"
+
+
+
+
+
+
 
 
 run :: LoxT IO ()
