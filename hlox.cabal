@@ -81,8 +81,10 @@ library lox-internal
     exposed-modules:  Lox.Lexer Lox.Token Lox.Loc
 
     build-depends:
-        base ^>=4.18.2.1
+        ansi-terminal >= 1.0
+      , base ^>=4.18.2.1
       , bytestring
+      , colour
       , data-default
       , mtl
       , transformers

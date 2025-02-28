@@ -16,17 +16,24 @@ import Data.List (sortBy, foldl', singleton)
 import Data.Maybe (fromMaybe)
 import Data.Ord (comparing)
 import Data.Tuple (swap)
+import System.Console.ANSI.Codes(setSGRCode)
+import System.Console.ANSI.Types ( SGR(SetConsoleIntensity, SetUnderlining, SetRGBColor, SetColor))
 import System.IO (hPrint, hPutStr, hPutStrLn, readFile', stderr)
 import System.IO.Error (isEOFError)
 import Prelude hiding (lex)
-
-import qualified Lox.Token as Tok (RawToken(..), Token(..))
 import Lox.Token as Tok (RawToken, Token, token, keyword)
-
 import Lox.Loc (Loc, adjacent, inc, steps)
 
-putErrLn = hPutStrLn stderr
+import qualified Data.Colour.Names as Col
+import qualified System.Console.ANSI.Types as Console (Color(..)
+                                                      , ConsoleLayer(..)
+                                                      , ColorIntensity(Vivid, Dull)
+                                                      , ConsoleIntensity(BoldIntensity)
+                                                      )
 
+import qualified Lox.Token as Tok (RawToken(..), Token(..))
+
+putErrLn = hPutStrLn stderr
 
 data LexState = LexState { loc   :: !Loc
                          , toLex :: !String
@@ -34,7 +41,6 @@ data LexState = LexState { loc   :: !Loc
 
 lexInit :: String -> LexState
 lexInit = LexState def
-
 
 type LoxConfig = ()
 
@@ -60,7 +66,7 @@ execLox c s a = let (Identity x) = execLoxT c s a in x
 
 runPrompt :: IO ()
 runPrompt = do
-  liftIO $ putErrLn "Welcome to the Lox interpreter!"
+  liftIO welcomeMessage
 
   repl `catch` \(e :: IOError) -> if isEOFError e then putErrLn "See ya!"
                                   else throwIO e
@@ -76,6 +82,26 @@ runPrompt = do
                 Left errors -> printErrors line errors
                 Right _ -> return ()
           )
+
+welcomeMessage :: IO ()
+welcomeMessage = do
+  putStr $ setSGRCode [bold]
+  mapM_ (\(c, (bg, fg)) -> putStr $ setSGRCode (sgr bg fg) ++ [c]) $ zip msgString colorCycle
+  putStrLn $ setSGRCode []
+
+
+  where sgr bg fg = [ SetRGBColor Console.Foreground fg
+                    , SetRGBColor Console.Background bg]
+
+
+        colorCycle = cycle [ (Col.red,    Col.green)
+                           , (Col.orange, Col.blue)
+                           , (Col.yellow, Col.indigo)
+                           , (Col.green,  Col.red)
+                           , (Col.blue,   Col.orange)
+                           , (Col.indigo, Col.yellow)
+                           ]
+        msgString = "Welcome to the Lox interpreter!"
 
 runFile :: String -> IO ()
 runFile filePath = do
@@ -96,7 +122,6 @@ printErrors s errs =
       errLines = getLines 0 def (map (startLoc . fst) errs') (lines s)
   in mapM_ (uncurry printError) $ zip errs' errLines
 
-  -- TODO: Colours :)
   where sortByLoc :: [LexError] -> [LexError]
         sortByLoc = sortBy (comparing startLoc)
 
@@ -119,22 +144,44 @@ printErrors s errs =
 
         printError :: (LexError, String) -> (Int, String, Int) -> IO ()
         printError (err, extraChars) (lineNo, line, startChar) = do
+
           let errLen = length extraChars + steps (startLoc err) (endLoc err)
               errLen' = min errLen $ length line - startChar
+
           hPutStrLn stderr ""
-          hPutStrLn stderr $ "  Error " ++ show lineNo ++  ":" ++ show startChar ++ ":"
-          hPutStrLn stderr $  "    " ++ line
+          hPutStr   stderr $ style [bold] (show lineNo ++  ":" ++ show startChar ++ colon)
+          hPutStrLn stderr $ prettyErr err extraChars
+          hPutStrLn stderr $ "    " ++ style badCodeLineStyle line
           hPutStr   stderr $ replicate (startChar + 4) ' '
           hPutStrLn stderr $ errMarker errLen'
-          hPutStrLn stderr $ prettyErr err extraChars
 
-        errMarker errLen = '^' : replicate (errLen-1) '~'
+        errMarker errLen = style errorMarkerStyle $ '^' : replicate (errLen-1) '~'
 
-        prettyErr (LexError _ s) _ = "Lexical Error: " ++ s
-        prettyErr (UnexpectedCharacter _ c) "" = "Unexpected character: '" ++ [c] ++ "'"
-        prettyErr (UnexpectedCharacter _ c) s = "Unexpected characters: '" ++ c:s ++ "'"
-        prettyErr (UnterminatedString _ _) _ = "Unterminated string"
+        prettyErr (LexError _ s) _             = mconcat [ style errorStyle "Lexical Error"
+                                                         , style [bold] (colon ++ s)
+                                                         ]
+        prettyErr (UnexpectedCharacter _ c) "" = mconcat [ style errorStyle "Unexpected character"
+                                                         , style [bold] (colon ++ quote [c])
+                                                         ]
+        prettyErr (UnexpectedCharacter _ c) s  = mconcat [ style errorStyle "Unexpected characters"
+                                                         , style [bold] (colon ++ quote (c:s))
+                                                         ]
+        prettyErr (UnterminatedString _ _) _   = style errorStyle "Unterminated string"
 
+style :: [SGR] -> String -> String
+style sgr s = setSGRCode sgr ++ s ++ setSGRCode []
+
+bold = SetConsoleIntensity Console.BoldIntensity
+
+errorStyle = [ bold , SetColor Console.Foreground Console.Vivid Console.Red]
+badCodeLineStyle = [ SetColor Console.Foreground Console.Dull Console.Cyan ]
+errorMarkerStyle = [ SetColor Console.Foreground Console.Vivid Console.White ]
+
+colon :: String
+colon = ": "
+
+quote :: String -> String
+quote s = '‘' : s ++ "’"
 
 
 
