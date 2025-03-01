@@ -85,7 +85,7 @@ printErrors s errs =
         getLines _ _ [] _                     = []
         getLines _ _ _ []                     = error "Ran out of lines"
         getLines lineNo pos (loc:locs) (l:ls) =
-          let lineEnd = inc (length l + 1) pos
+          let lineEnd = inc (length l) pos
           in if loc > lineEnd then getLines (lineNo + 1) (inc 1 lineEnd) (loc:locs) ls
           else (lineNo, l, steps pos loc)  : getLines lineNo pos locs (l:ls)
 
