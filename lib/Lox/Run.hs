@@ -3,7 +3,8 @@ module Lox.Run where
 
 import Control.Monad (forever, foldM_)
 import Control.Monad.IO.Class (liftIO)
-import Control.Exception (catch, throwIO)
+import Control.Exception (SomeException(..), Exception, catch, try, throwIO)
+import Data.Typeable (Typeable, cast)
 import Data.Default (def)
 import Data.List (sortBy, foldl')
 import Data.Ord (comparing)
@@ -22,44 +23,32 @@ import qualified System.Console.ANSI.Types as Console ( Color(..)
 
 
 import Lox.Config
-import Lox.Lexer (lex, evalLexT, lexInit, LexT, LexError(..), LexState(..), startLoc, endLoc)
+import Lox.Lexer (lex, LexError(..), LexState(..), startLoc, endLoc)
 import Lox.Loc(Loc(..), inc, adjacent, steps)
+
+
+data LoxException = LexicalException | ParseException deriving (Show, Typeable)
+instance Exception LoxException
 
 runPrompt :: IO ()
 runPrompt = do
   welcomeMessage
-
   repl `catch` \(e :: IOError) -> if isEOFError e then hPutStrLn stderr "See ya!"
                                   else throwIO e
 
   where repl :: IO ()
-        repl = forever (
-          do
-            line <- getLine
-            let state = LexState { loc=def, toLex = line}
-
-            res <- evalLexT () state run
-            case res of
-                Left errors -> printErrors line errors
-                Right _ -> return ()
-          )
+        repl = forever (getLine >>= try . run line :: IO (Either LoxException ()))
 
 runFile :: String -> IO ()
 runFile filePath = do
   hPutStrLn stderr  ("Received " ++ filePath)
+  readFile' filePath >>= run
 
-  code <- readFile' filePath
-
-  evalLexT () (lexInit code) run >>= (
-    \case
-      Left errors -> printErrors code errors
-      Right _ -> return ())
-
-
-run :: LexT IO ()
-run = do
-  tokens <- lex
-  liftIO $ mapM_ print tokens
+run :: String -> IO ()
+run code = do
+  case lex () code of
+    Left errors -> printErrors code errors >> throwIO LexicalException
+    Right tokens -> mapM_ print tokens
 
 
 printErrors :: String -> [LexError] -> IO ()
@@ -87,7 +76,7 @@ printErrors s errs =
         getLines lineNo pos (loc:locs) (l:ls) =
           let lineEnd = inc (length l) pos
           in if loc > lineEnd then getLines (lineNo + 1) (inc 1 lineEnd) (loc:locs) ls
-          else (lineNo, l, steps pos loc)  : getLines lineNo pos locs (l:ls)
+          else (lineNo, l, steps pos loc) : getLines lineNo pos locs (l:ls)
 
         printError :: (LexError, String) -> (Int, String, Int) -> IO ()
         printError (err, extraChars) (lineNo, line, startChar) = do

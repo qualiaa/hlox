@@ -57,12 +57,16 @@ evalLex c s a = let (Identity x) = evalLexT c s a in x
 execLex c s a = let (Identity x) = execLexT c s a in x
 
 
-lex :: (Monad m) => LexT m [Token]
-lex = do
+lex :: LoxConfig -> String -> Either [LexError] [Token]
+lex c s = evalLex c (lexInit s) lex'
+
+
+lex' :: (Monad m) => LexT m [Token]
+lex' = do
   tok <- tryError lexOne
   case tok of
     Right tok@(Tok.Token{token=Tok.EOF}) -> return [tok]
-    Right tok -> (tok:) <$> lex
+    Right tok -> (tok:) <$> lex'
 
     Left _ -> findAllErrors
 
@@ -120,7 +124,7 @@ lex = do
 
             Left [] -> lexError "Unknown error!"
 
-            Left [e] -> skipError e >> throwError [e] <|> findAllErrors
+            Left [e] -> skipError e >> throwError' e <|> findAllErrors
 
             Left e -> throw (PatternMatchFail $ "Compound errors have not been resolved! " ++ show e)
 
