@@ -74,7 +74,7 @@ lexeme   GreaterEqual = ">="
 lexeme           Less = "<"
 lexeme      LessEqual = "<="
 lexeme (Identifier s) = show s
-lexeme    (String_ s) = show s
+lexeme    (String_ s) = '"' : show s ++ ['"']
 lexeme     (Number n) = show n
 lexeme            And = "and"
 lexeme          Class = "class"

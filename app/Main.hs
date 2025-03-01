@@ -1,10 +1,11 @@
 module Main where
 
 import Control.Applicative (Alternative((<|>)))
-import Lox.Lexer ( runFile, runPrompt )
 import System.Environment (getArgs, getProgName)
 import System.IO (hPutStrLn, stderr)
 import System.Exit (exitWith, ExitCode (ExitFailure))
+
+import Lox.Run ( runFile, runPrompt )
 
 main :: IO ()
 main = do

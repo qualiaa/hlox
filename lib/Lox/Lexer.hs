@@ -1,39 +1,24 @@
-{-# LANGUAGE LambdaCase #-}
 module Lox.Lexer where
 
-import Control.Monad (forever, foldM_, void)
+import Control.Monad (void)
 import Control.Applicative (Alternative((<|>)), asum, some, many)
 import Control.Monad.Identity (Identity(..))
-import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Except (ExceptT(..), runExceptT, tryError, MonadError(throwError), withError)
 import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Control.Monad.State (StateT(..), evalStateT, runStateT, gets, modify', MonadState (get, put))
-import Control.Exception (catch, throwIO, throw, PatternMatchFail(..))
+import Control.Exception (throw, PatternMatchFail(..))
 import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
 import Data.Default (def)
 import Data.Functor (($>))
-import Data.List (sortBy, foldl', singleton)
 import Data.Maybe (fromMaybe)
-import Data.Ord (comparing)
-import Data.Tuple (swap)
-import System.Console.ANSI.Codes(setSGRCode)
-import System.Console.ANSI.Types ( SGR(SetConsoleIntensity, SetUnderlining, SetRGBColor, SetColor))
-import System.IO (hPrint, hPutStr, hPutStrLn, readFile', stderr)
-import System.IO.Error (isEOFError)
 import Prelude hiding (lex)
+
 import Lox.Token as Tok (RawToken, Token, token, keyword)
 import Lox.Loc (Loc, adjacent, inc, steps)
 
-import qualified Data.Colour.Names as Col
-import qualified System.Console.ANSI.Types as Console (Color(..)
-                                                      , ConsoleLayer(..)
-                                                      , ColorIntensity(Vivid, Dull)
-                                                      , ConsoleIntensity(BoldIntensity)
-                                                      )
 
+import Lox.Config
 import qualified Lox.Token as Tok (RawToken(..), Token(..))
-
-putErrLn = hPutStrLn stderr
 
 data LexState = LexState { loc   :: !Loc
                          , toLex :: !String
@@ -42,159 +27,37 @@ data LexState = LexState { loc   :: !Loc
 lexInit :: String -> LexState
 lexInit = LexState def
 
-type LoxConfig = ()
-
 data LexError = LexError !Loc String
               | UnexpectedCharacter !Loc Char
               | UnterminatedString !Loc !Loc
               deriving Show
 
-type LoxT m = ReaderT LoxConfig (StateT LexState (ExceptT [LexError] m))
-type Lox = LoxT Identity
+startLoc :: LexError -> Loc
+startLoc (LexError l _) = l
+startLoc (UnexpectedCharacter l _) = l
+startLoc (UnterminatedString l _) = l
 
-runLoxT :: (Monad m) => LoxConfig -> LexState -> LoxT m a -> m (Either [LexError] (a, LexState))
-runLoxT c s a = let a'  = runReaderT a c
+endLoc :: LexError -> Loc
+endLoc (UnterminatedString _ l) = succ l
+endLoc e = succ $ startLoc e
+
+type LexT m = ReaderT LoxConfig (StateT LexState (ExceptT [LexError] m))
+type Lex = LexT Identity
+
+runLexT :: (Monad m) => LoxConfig -> LexState -> LexT m a -> m (Either [LexError] (a, LexState))
+runLexT c s a = let a'  = runReaderT a c
                     a'' = runStateT a' s
                 in runExceptT a''
 
-evalLoxT c s = fmap (fmap fst) . runLoxT c s
-execLoxT c s = fmap (fmap snd) . runLoxT c s
+evalLexT c s = fmap (fmap fst) . runLexT c s
+execLexT c s = fmap (fmap snd) . runLexT c s
 
-runLox  c s a = let (Identity x) = runLoxT  c s a in x
-evalLox c s a = let (Identity x) = evalLoxT c s a in x
-execLox c s a = let (Identity x) = execLoxT c s a in x
-
-runPrompt :: IO ()
-runPrompt = do
-  liftIO welcomeMessage
-
-  repl `catch` \(e :: IOError) -> if isEOFError e then putErrLn "See ya!"
-                                  else throwIO e
-
-  where repl :: IO ()
-        repl = forever (
-          do
-            line <- getLine
-            let state = LexState { loc=def, toLex = line}
-
-            res <- evalLoxT () state run
-            case res of
-                Left errors -> printErrors line errors
-                Right _ -> return ()
-          )
-
-welcomeMessage :: IO ()
-welcomeMessage = do
-  putStr $ setSGRCode [bold]
-  mapM_ (\(c, (bg, fg)) -> putStr $ setSGRCode (sgr bg fg) ++ [c]) $ zip msgString colorCycle
-  putStrLn $ setSGRCode []
+runLex  c s a = let (Identity x) = runLexT  c s a in x
+evalLex c s a = let (Identity x) = evalLexT c s a in x
+execLex c s a = let (Identity x) = execLexT c s a in x
 
 
-  where sgr bg fg = [ SetRGBColor Console.Foreground fg
-                    , SetRGBColor Console.Background bg]
-
-
-        colorCycle = cycle [ (Col.red,    Col.green)
-                           , (Col.orange, Col.blue)
-                           , (Col.yellow, Col.indigo)
-                           , (Col.green,  Col.red)
-                           , (Col.blue,   Col.orange)
-                           , (Col.indigo, Col.yellow)
-                           ]
-        msgString = "Welcome to the Lox interpreter!"
-
-runFile :: String -> IO ()
-runFile filePath = do
-  putErrLn ("Received " ++ filePath)
-
-  code <- readFile' filePath
-
-  evalLoxT () (lexInit code) run >>= (
-    \case
-      Left errors -> liftIO $ printErrors code errors
-      Right _ -> return ())
-
-
-printErrors :: String -> [LexError] -> IO ()
-printErrors _ [] = putErrLn "Unknown error occurred!"
-printErrors s errs =
-  let errs' = merge $ sortByLoc errs
-      errLines = getLines 0 def (map (startLoc . fst) errs') (lines s)
-  in mapM_ (uncurry printError) $ zip errs' errLines
-
-  where sortByLoc :: [LexError] -> [LexError]
-        sortByLoc = sortBy (comparing startLoc)
-
-        -- A series of adjacent UnexpectedCharacters can be merged into one error
-        merge :: [LexError] -> [(LexError, String)]
-        merge [] = []
-        merge (x:xs) = reverse $ foldl' joinAdjacent [(x, "")] xs
-
-        joinAdjacent a@((aErr@(UnexpectedCharacter loc0 _), aS):aErrs) err1@(UnexpectedCharacter loc1 c1) =
-          if inc (length aS) loc0  `adjacent` loc1 then (aErr, aS ++ [c1]):aErrs else (err1, ""):a
-        joinAdjacent a err = (err, ""):a
-
-        getLines :: Int -> Loc -> [Loc] -> [String] -> [(Int, String, Int)]
-        getLines _ _ [] _                     = []
-        getLines _ _ _ []                     = error "Ran out of lines"
-        getLines lineNo pos (loc:locs) (l:ls) =
-          let lineEnd = inc (length l + 1) pos
-          in if loc > lineEnd then getLines (lineNo + 1) (inc 1 lineEnd) (loc:locs) ls
-          else (lineNo, l, steps pos loc)  : getLines lineNo pos locs (l:ls)
-
-        printError :: (LexError, String) -> (Int, String, Int) -> IO ()
-        printError (err, extraChars) (lineNo, line, startChar) = do
-
-          let errLen = length extraChars + steps (startLoc err) (endLoc err)
-              errLen' = min errLen $ length line - startChar
-
-          hPutStrLn stderr ""
-          hPutStr   stderr $ style [bold] (show lineNo ++  ":" ++ show startChar ++ colon)
-          hPutStrLn stderr $ prettyErr err extraChars
-          hPutStrLn stderr $ "    " ++ style badCodeLineStyle line
-          hPutStr   stderr $ replicate (startChar + 4) ' '
-          hPutStrLn stderr $ errMarker errLen'
-
-        errMarker errLen = style errorMarkerStyle $ '^' : replicate (errLen-1) '~'
-
-        prettyErr (LexError _ s) _             = mconcat [ style errorStyle "Lexical Error"
-                                                         , style [bold] (colon ++ s)
-                                                         ]
-        prettyErr (UnexpectedCharacter _ c) "" = mconcat [ style errorStyle "Unexpected character"
-                                                         , style [bold] (colon ++ quote [c])
-                                                         ]
-        prettyErr (UnexpectedCharacter _ c) s  = mconcat [ style errorStyle "Unexpected characters"
-                                                         , style [bold] (colon ++ quote (c:s))
-                                                         ]
-        prettyErr (UnterminatedString _ _) _   = style errorStyle "Unterminated string"
-
-style :: [SGR] -> String -> String
-style sgr s = setSGRCode sgr ++ s ++ setSGRCode []
-
-bold = SetConsoleIntensity Console.BoldIntensity
-
-errorStyle = [ bold , SetColor Console.Foreground Console.Vivid Console.Red]
-badCodeLineStyle = [ SetColor Console.Foreground Console.Dull Console.Cyan ]
-errorMarkerStyle = [ SetColor Console.Foreground Console.Vivid Console.White ]
-
-colon :: String
-colon = ": "
-
-quote :: String -> String
-quote s = '‘' : s ++ "’"
-
-
-
-
-
-
-
-run :: LoxT IO ()
-run = do
-  tokens <- lex
-  liftIO $ mapM_ print tokens
-
-lex :: (Monad m) => LoxT m [Token]
+lex :: (Monad m) => LexT m [Token]
 lex = do
   tok <- tryError lexOne
   case tok of
@@ -245,12 +108,7 @@ lex = do
 
 
         lexOne :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Token
-        lexOne = do
-          -- lexOneRaw concatenates lex errors for every token. We need to
-          -- replace that with a single error indicating the unlexable character
-          skipNonTokens
-
-          uncurry Tok.Token . swap <$> withLoc lexOneRaw
+        lexOne = skipNonTokens >> uncurry Tok.Token <$> withLoc lexOneRaw
 
         findAllErrors :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m a
         findAllErrors = do
@@ -266,8 +124,19 @@ lex = do
 
             Left e -> throw (PatternMatchFail $ "Compound errors have not been resolved! " ++ show e)
 
-skipSpaces :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m ()
-skipSpaces = skipMany $ satisfy isSpace
+number :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Double
+number = read <$> numberString
+  where digits = some (satisfy isDigit)
+
+        numberString = do
+          decimal <- digits
+          fractional <- (optional (char '.') >> digits) <|> return "0"
+          return $ decimal ++ "." ++ fractional
+
+identifier :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m RawToken
+identifier = do
+  str <- (:) <$> satisfy isAlpha <*> many (satisfy isAlphaNum)
+  return $ fromMaybe (Tok.Identifier str) (Tok.keyword str)
 
 -- Comment handling: if //, ignore characters until \n or EOF
 -- NOTE: This may hit EOF in file with no trailing newline (or repl). This is ok
@@ -275,6 +144,13 @@ skipSpaces = skipMany $ satisfy isSpace
 skipNonTokens :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m ()
 skipNonTokens = skipSpaces >> optional (comment >> skipSpaces)
   where comment = string "//" >> nextChar `manyTill` (void (char '\n') <|> eof)
+
+unexpectedCharacter :: (MonadState LexState m, MonadError [LexError] m) => m a
+unexpectedCharacter = gets (UnexpectedCharacter . loc) <*> nextChar >>= throwError'
+
+unterminatedString :: (MonadState LexState m, MonadError [LexError] m) => Loc -> m a
+unterminatedString startLoc = gets (UnterminatedString startLoc . loc) >>= throwError'
+
 
 -- As per usual, I have immediately found myself writing a scuffed parser
 -- combinator ... if only parsec had been invented.
@@ -289,23 +165,13 @@ nextChar = do
 
   where newState loc (c:rest) = LexState { loc=succ loc , toLex=rest}
 
-number :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Double
-number = read <$> numberString
-  where digits = some (satisfy isDigit)
-
-        numberString = do
-          decimal <- digits
-          fractional <- (optional (char '.') >> digits) <|> return "0"
-          return $ decimal ++ "." ++ fractional
-
-
-identifier :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m RawToken
-identifier = do
-  str <- (:) <$> satisfy isAlpha <*> many (satisfy isAlphaNum)
-  return $ fromMaybe (Tok.Identifier str) (Tok.keyword str)
-
 look :: (MonadState LexState m) => m String
 look = gets toLex
+
+eof :: (MonadState LexState m, MonadError [LexError] m) => m ()
+eof = do
+  remaining <- look
+  if null remaining then return () else lexError "Expected EOF"
 
 char :: (MonadState LexState m, MonadError [LexError] m) => Char -> m Char
 char c = do
@@ -320,29 +186,26 @@ satisfy p = do
   c <- nextChar
   if p c then return c else lexError $ "Character" ++ [c] ++ "did not match predicate"
 
-manyTill :: (Alternative m) => m a -> m b -> m [a]
+skipSpaces :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m ()
+skipSpaces = skipMany $ satisfy isSpace
+
+manyTill :: Alternative m => m a -> m b -> m [a]
 manyTill p end = (end $> []) <|> (:) <$> p <*> manyTill p end
 
-withLoc :: (MonadState LexState m) => m a -> m (Loc, a)
-withLoc p = gets ((,) . loc) <*> p
+withLoc :: MonadState LexState m => m a -> m (a, Loc)
+withLoc p = (,) <$> p <*> gets loc
 
-between :: (Applicative m) => m open -> m close -> m a -> m a
+between :: Applicative m => m open -> m close -> m a -> m a
 between open close p = open *> p <* close
 
-skipMany :: (Alternative m, MonadState LexState m, MonadError [LexError] m)
-         => m a -> m ()
+skipMany :: Alternative m => m a -> m ()
 skipMany = void . many
 
-option :: (Alternative m) => a -> m a -> m a
+option :: Alternative m => a -> m a -> m a
 option x p = p <|> pure x
 
-optional :: (Alternative m) => m a -> m ()
+optional :: Alternative m => m a -> m ()
 optional p = void p <|> pure ()
-
-eof :: (MonadState LexState m, MonadError [LexError] m) => m ()
-eof = do
-  remaining <- look
-  if null remaining then return () else lexError "Expected EOF"
 
 lexError :: (MonadState LexState m, MonadError [LexError] m)
            => String -> m a
@@ -350,7 +213,7 @@ lexError s = do
   loc <- gets loc
   throwError [LexError loc s]
 
-skipError :: (MonadState LexState m, MonadError [LexError] m) => LexError -> m ()
+skipError :: MonadState LexState m => LexError -> m ()
 skipError e = do
   loc0 <- gets loc
   let loc1 = endLoc e
@@ -359,26 +222,11 @@ skipError e = do
               loc=loc1,
                 toLex=drop (steps loc0 loc1) toLex})
 
-unexpectedCharacter :: (MonadState LexState m, MonadError [LexError] m) => m a
-unexpectedCharacter = gets (UnexpectedCharacter . loc) <*> nextChar >>= throwError'
-
-unterminatedString :: (MonadState LexState m, MonadError [LexError] m) => Loc -> m a
-unterminatedString startLoc = gets (UnterminatedString startLoc . loc) >>= throwError'
-
-throwError' :: (MonadState LexState m, MonadError [LexError] m) => LexError -> m a
+throwError' :: MonadError [e] m => e -> m a
 throwError' e = throwError [e]
 
-startLoc :: LexError -> Loc
-startLoc (LexError l _) = l
-startLoc (UnexpectedCharacter l _) = l
-startLoc (UnterminatedString l _) = l
-
-endLoc :: LexError -> Loc
-endLoc (UnterminatedString _ l) = succ l
-endLoc e = succ $ startLoc e
-
-setError :: (MonadError [LexError] m) => LexError -> m a -> m a
+setError :: MonadError [e] m => e -> m a -> m a
 setError e = withError $ const [e]
 
-squashErrors :: (MonadError [LexError] m) => m a -> m a
+squashErrors :: MonadError [e] m => m a -> m a
 squashErrors = withError $ const []
