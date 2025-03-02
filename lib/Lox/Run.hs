@@ -37,7 +37,7 @@ runPrompt = do
                                   else throwIO e
 
   where repl :: IO ()
-        repl = forever (getLine >>= try . run line :: IO (Either LoxException ()))
+        repl = forever (getLine >>= try . run :: IO (Either LoxException ()))
 
 runFile :: String -> IO ()
 runFile filePath = do

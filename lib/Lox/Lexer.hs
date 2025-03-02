@@ -9,16 +9,17 @@ import Control.Monad.State (StateT(..), evalStateT, runStateT, gets, modify', Mo
 import Control.Exception (throw, PatternMatchFail(..))
 import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
 import Data.Default (def)
+import Data.List (singleton)
 import Data.Functor (($>))
 import Data.Maybe (fromMaybe)
 import Prelude hiding (lex)
 
-import Lox.Token as Tok (RawToken, Token, token, keyword)
+import Lox.Token as Tok (TokenType, Token(tokenType), keyword)
 import Lox.Loc (Loc, adjacent, inc, steps)
 
 
 import Lox.Config
-import qualified Lox.Token as Tok (RawToken(..), Token(..))
+import qualified Lox.Token as Tok (TokenType(..), Token(..))
 
 data LexState = LexState { loc   :: !Loc
                          , toLex :: !String
@@ -65,61 +66,67 @@ lex' :: (Monad m) => LexT m [Token]
 lex' = do
   tok <- tryError lexOne
   case tok of
-    Right tok@(Tok.Token{token=Tok.EOF}) -> return [tok]
+    Right tok@(Tok.Token{tokenType=Tok.EOF}) -> return [tok]
     Right tok -> (tok:) <$> lex'
 
     Left _ -> findAllErrors
 
-  where lexOneRaw :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m RawToken
+  where lexOneRaw :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m (TokenType, String)
         lexOneRaw = do
-          startLoc <- gets loc
+          let pair' t = (t,) . singleton
+              oneOrTwo t0 c0 t1 c1 =
+                char c0 >> (((t1,) . (c0:) . singleton <$> char c1) <|> return (t0, [c0]))
 
+          startLoc <- gets loc
           openQuote <- tryError $ char '"'
+
           case openQuote of
+            -- This lexeme was a string
             Right _ -> do
               value <- many $ satisfy (/='"')
-              squashErrors (char '"' >> return (Tok.String_ value)) <|> unterminatedString startLoc
+              squashErrors (char '"' >> return (Tok.String_, '"': value ++ ['"'])) <|> unterminatedString startLoc
 
+            -- This lexeme was not a string, try everything else
             Left _ -> squashErrors (asum [
-                char '(' >> return Tok.LeftParen,
-                char ')' >> return Tok.RightParen,
-                char '{' >> return Tok.LeftBrace,
-                char '}' >> return Tok.RightBrace,
-                char ',' >> return Tok.Comma,
-                char '.' >> return Tok.Dot,
-                char '-' >> return Tok.Minus,
-                char '+' >> return Tok.Plus,
-                char ';' >> return Tok.Semicolon,
-                char '*' >> return Tok.Star,
-
-                char '=' >> (char '=' >> return Tok.EqualEqual)   <|> return Tok.Equal,
-                char '!' >> (char '=' >> return Tok.BangEqual)    <|> return Tok.Bang,
-                char '>' >> (char '=' >> return Tok.GreaterEqual) <|> return Tok.Greater,
-                char '<' >> (char '=' >> return Tok.LessEqual)    <|> return Tok.Less,
-
+                pair' Tok.LeftParen  <$> char '(',
+                pair' Tok.RightParen <$> char ')',
+                pair' Tok.LeftBrace  <$> char '{',
+                pair' Tok.RightBrace <$> char '}',
+                pair' Tok.Comma      <$> char ',',
+                pair' Tok.Dot        <$> char '.',
+                pair' Tok.Minus      <$> char '-',
+                pair' Tok.Plus       <$> char '+',
+                pair' Tok.Semicolon  <$> char ';',
+                pair' Tok.Star       <$> char '*',
                 -- Comments have already been dealt with
-                char '/' >> return Tok.Slash,
+                pair' Tok.Slash      <$> char '/',
 
-                -- FIXME: Because we parse the number, we need to store the lexeme for rich error reporting.
-                Tok.Number <$> number,
+                oneOrTwo Tok.Equal    '=' Tok.EqualEqual    '=',
+                oneOrTwo Tok.Bang     '!' Tok.BangEqual     '=',
+                oneOrTwo Tok.Greater  '>' Tok.GreaterEqual  '=',
+                oneOrTwo Tok.Less     '<' Tok.LessEqual     '=',
 
-                -- Identifier parsing includes keyword tokens
+                (Tok.Number,) <$> number,
+
+                -- Identifier lexing includes keyword tokens
                 identifier,
 
-                eof >> return Tok.EOF
+                eof >> return (Tok.EOF, "")
                 ]
              ) <|> unexpectedCharacter
 
 
         lexOne :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Token
-        lexOne = skipNonTokens >> uncurry Tok.Token <$> withLoc lexOneRaw
+        lexOne = let toToken (loc, (tok, s)) = Tok.Token tok loc s
+
+                 in skipNonTokens >> toToken <$> withLoc lexOneRaw
 
         findAllErrors :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m a
         findAllErrors = do
           tok <- tryError lexOne
 
           case tok of
-            Right (Tok.Token{token=Tok.EOF}) -> throwError []
+            Right (Tok.Token{tokenType=Tok.EOF}) -> throwError []
             Right _ -> findAllErrors
 
             Left [] -> lexError "Unknown error!"
@@ -128,25 +135,25 @@ lex' = do
 
             Left e -> throw (PatternMatchFail $ "Compound errors have not been resolved! " ++ show e)
 
-number :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m Double
-number = read <$> numberString
+number :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m String
+number = do
+  decimal <- digits
+  fractional <- (optional (char '.') >> digits) <|> return "0"
+  return $ decimal ++ "." ++ fractional
+
   where digits = some (satisfy isDigit)
 
-        numberString = do
-          decimal <- digits
-          fractional <- (optional (char '.') >> digits) <|> return "0"
-          return $ decimal ++ "." ++ fractional
 
-identifier :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m RawToken
+identifier :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m (TokenType, String)
 identifier = do
   str <- (:) <$> satisfy isAlpha <*> many (satisfy isAlphaNum)
-  return $ fromMaybe (Tok.Identifier str) (Tok.keyword str)
+  return . (, str) $ fromMaybe Tok.Identifier (Tok.keyword str)
 
 -- Comment handling: if //, ignore characters until \n or EOF
 -- NOTE: This may hit EOF in file with no trailing newline (or repl). This is ok
 --       because successful lex of eof is idempotent.
 skipNonTokens :: (Alternative m, MonadState LexState m, MonadError [LexError] m) => m ()
-skipNonTokens = skipSpaces >> optional (comment >> skipSpaces)
+skipNonTokens = skipSpaces >> optional (comment >> skipNonTokens)
   where comment = string "//" >> nextChar `manyTill` (void (char '\n') <|> eof)
 
 unexpectedCharacter :: (MonadState LexState m, MonadError [LexError] m) => m a
@@ -196,8 +203,8 @@ skipSpaces = skipMany $ satisfy isSpace
 manyTill :: Alternative m => m a -> m b -> m [a]
 manyTill p end = (end $> []) <|> (:) <$> p <*> manyTill p end
 
-withLoc :: MonadState LexState m => m a -> m (a, Loc)
-withLoc p = (,) <$> p <*> gets loc
+withLoc :: MonadState LexState m => m a -> m (Loc, a)
+withLoc p = (,) <$> gets loc <*> p
 
 between :: Applicative m => m open -> m close -> m a -> m a
 between open close p = open *> p <* close
