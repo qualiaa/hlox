@@ -78,7 +78,7 @@ executable lox
     default-language: GHC2021
 
 library lox-internal
-    exposed-modules:  Lox.Config Lox.Lexer Lox.Loc Lox.Run Lox.Token
+    exposed-modules:  Lox.AST Lox.Config Lox.Lexer Lox.Loc Lox.Parser Lox.Run Lox.Token
 
     build-depends:
         ansi-terminal >= 1.0

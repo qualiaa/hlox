@@ -24,6 +24,7 @@ import qualified System.Console.ANSI.Types as Console ( Color(..)
 
 import Lox.Config
 import Lox.Lexer (lex, LexError(..), LexState(..), startLoc, endLoc)
+import Lox.Parser (parse)
 import Lox.Loc(Loc(..), inc, adjacent, steps)
 
 
@@ -48,7 +49,9 @@ run :: String -> IO ()
 run code = do
   case lex () code of
     Left errors -> printErrors code errors >> throwIO LexicalException
-    Right tokens -> mapM_ print tokens
+    Right tokens -> do
+      mapM_ print tokens
+      print $ parse tokens
 
 
 printErrors :: String -> [LexError] -> IO ()

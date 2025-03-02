@@ -45,8 +45,8 @@ data TokenType = LeftParen
                | Var
                | While
 
-              | EOF
-              deriving Show
+               | EOF
+               deriving (Eq, Show)
 
 data Token = Token { tokenType   :: !TokenType
                    , tokenLoc    :: !Loc
