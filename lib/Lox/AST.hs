@@ -2,7 +2,7 @@ module Lox.AST where
 
 import Lox.Token (Token)
 
-data Literal = LoxStr !String | LoxNum !Double | LoxBool !Bool | LoxNil deriving Show
+data LoxVal = LoxStr !String | LoxNum !Double | LoxBool !Bool | LoxNil deriving (Eq, Show)
 
 data Expr = Literal LoxVal
           | Unary Token Expr
