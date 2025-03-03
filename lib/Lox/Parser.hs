@@ -3,10 +3,10 @@ module Lox.Parser where
 import Control.Applicative (Alternative((<|>)), asum)
 import Control.Monad (when)
 import Control.Monad.Identity (Identity(..))
-import Control.Monad.Except (ExceptT(..), runExceptT, tryError, MonadError(throwError), withError)
+import Control.Monad.Except (ExceptT(..), runExceptT, MonadError(throwError))
 import Control.Monad.Reader (ReaderT(..), runReaderT)
 import Control.Monad.State (StateT(..), evalStateT, runStateT, gets, modify', MonadState (get, put))
-import Control.Monad.Trans.Maybe (MaybeT(..), hoistMaybe)
+import Control.Monad.Trans.Maybe (MaybeT(..))
 import Control.Monad.Trans.Class (lift)
 import Data.List (foldl')
 import Data.List.NonEmpty (NonEmpty((:|)))
@@ -14,13 +14,12 @@ import Data.Maybe (isJust, maybe)
 
 import qualified Data.List.NonEmpty as NE
 
-import Lox.AST (Expr(..), Literal(..))
+import Lox.AST (Expr(..), LoxVal(..))
 import Lox.Config
 import Lox.Token (Token(..), TokenType(..))
 
 type ParseState = [Token]
 type ParseError = String
-
 
 type ParseT m = ReaderT LoxConfig (ExceptT ParseError (StateT ParseState m))
 type Parse = ParseT Identity
@@ -70,23 +69,25 @@ primary = do
     let match' = MaybeT . match . NE.singleton
 
         literals = map run handlers
+        literal = Literal <$> asum literals
         handlers = [ (True_,       const $ LoxBool True)
                    , (False_,      const $ LoxBool False)
                    , (Nil,         const LoxNil)
                    , (String_,     LoxStr . tokenLexeme)
                    , (Number,      LoxNum . read . tokenLexeme)]
-        run :: (TokenType, Token -> Literal) -> MaybeT Parse Literal
+        run :: (TokenType, Token -> LoxVal) -> MaybeT Parse LoxVal
         run (t, h) = h <$> match' t
+
+        parenExpr =
+          match' LeftParen >> lift (expression <* expect (NE.singleton RightParen) parenErr)
 
         parenErr = "Expect ')' after expression"
 
-    Literal <$> asum literals <|> (
-      match' LeftParen >> lift (expression <* expect (NE.singleton RightParen) parenErr)
-      )
+    literal <|> parenExpr
 
   case m of
     Just expr -> return expr
-    Nothing -> throwError "Expected literal."
+    Nothing -> throwError "Expected expression."
 
 binOp :: (MonadState ParseState m) => m Expr -> NonEmpty TokenType -> m Expr
 binOp operand validOperators = do
@@ -98,7 +99,7 @@ binOp operand validOperators = do
     Nothing -> return first
 
 nextToken :: (MonadState ParseState m) => m ()
-nextToken = modify' tail
+nextToken = modify' (drop 1)
 
 atEnd :: (MonadState ParseState m) => m Bool
 atEnd = gets null

@@ -2,7 +2,7 @@ module Lox.Token where
 
 import Lox.Loc (Loc(..))
 
-           -- Single character tokens
+               -- Single character tokens
 data TokenType = LeftParen
                | RightParen
                | LeftBrace

@@ -4,7 +4,7 @@ module Lox.Run where
 import Control.Monad (forever, foldM_)
 import Control.Monad.IO.Class (liftIO)
 import Control.Exception (SomeException(..), Exception, catch, try, throwIO)
-import Data.Typeable (Typeable, cast)
+import Data.Typeable (Typeable)
 import Data.Default (def)
 import Data.List (sortBy, foldl')
 import Data.Ord (comparing)
