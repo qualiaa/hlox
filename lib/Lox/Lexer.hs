@@ -31,7 +31,7 @@ lexInit = LexState def
 data LexError = LexError !Loc String
               | UnexpectedCharacter !Loc Char
               | UnterminatedString !Loc !Loc
-              deriving Show
+              deriving (Eq, Show)
 
 startLoc :: LexError -> Loc
 startLoc (LexError l _) = l
