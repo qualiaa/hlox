@@ -79,12 +79,12 @@ expectTokens expected  (Right tokens) = all (uncurry (==)) pairs
 
 genChar :: Gen Char
 genChar = FG.frequency [ (2, FG.inRange (FR.enum (chr 0, chr 127)))
-                       , (1, FG.inRange (FR.enum (chr 128, chr 255)))
+                       , (1, FG.inRange (FR.enum (chr 128, maxBound)))
                        ]
 
 prop_commentsIgnored :: Property ()
 prop_commentsIgnored = do
-  comment <- fmap (("//" ++) . filter isPrint) <$> gen $ FG.list (FR.between (1, 100)) genChar
+  comment <- fmap (("//" ++) . filter isPrint) <$> gen $ FG.list (FR.between (0, 100)) genChar
 
   let lex' = FP.fn                ("lexed", lex def)
       isEOF = FP.satisfies        ("onlyEOF", expectToken Tok.EOF)
@@ -93,7 +93,7 @@ prop_commentsIgnored = do
 
 
 prop_commentsDontAffectLex = do
-  comment <-  fmap (("//" ++) . filter isPrint) <$> gen $ FG.list (FR.between (1, 20)) genChar
+  comment <-  fmap (("//" ++) . filter isPrint) <$> gen $ FG.list (FR.between (0, 20)) genChar
 
   let realLexemes = unwords <$> (FG.list (FR.between (1, 10)) genToken >>= mapM genLexemeFor)
       gibberish = FG.list (FR.between (1, 50)) genChar
@@ -150,7 +150,7 @@ genIdentifierLexeme = do
   firstChar <- FG.choose (FG.inRange (FR.enum ('A', 'Z')))
                          (FG.inRange (FR.enum ('a', 'z')))
 
-  rest <- filter isAlphaNum <$> FG.list (FR.between (1, 100)) genChar
+  rest <- filter isAlphaNum <$> FG.list (FR.between (0, 100)) genChar
 
   let identifier = firstChar : rest
 
