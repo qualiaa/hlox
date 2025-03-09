@@ -139,7 +139,7 @@ prop_lexemesDontCollide = do
   assert $ FP.satisfies ("hasToken", expectTokens $ tokens <> NE.singleton Tok.EOF)
            `FP.dot`
            FP.fn ("lexed",  lex def)
-           .$    ("input", unwords . toList $ lexemes)
+           .$    ("input from " ++ show tokens , unwords . toList $ lexemes)
 
 
 genToken :: Gen Tok.TokenType
@@ -151,7 +151,12 @@ genIdentifierLexeme = do
                          (FG.inRange (FR.enum ('a', 'z')))
 
   rest <- filter isAlphaNum <$> FG.list (FR.between (1, 100)) genChar
-  return $ firstChar : rest
+
+  let identifier = firstChar : rest
+
+  case Tok.keyword identifier of
+    Just _ -> genIdentifierLexeme
+    Nothing -> return identifier
 
 genStringLexeme :: Gen String
 genStringLexeme = do
